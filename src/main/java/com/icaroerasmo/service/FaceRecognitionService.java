@@ -2,6 +2,7 @@ package com.icaroerasmo.service;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.stereotype.Service;
 import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
@@ -23,8 +24,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.toMap;
 import static org.bytedeco.opencv.global.opencv_core.CV_32SC1;
-import static org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_GRAYSCALE;
-import static org.bytedeco.opencv.global.opencv_imgcodecs.imread;
+import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
+import static org.bytedeco.opencv.global.opencv_imgproc.COLOR_RGB2GRAY;
+import static org.bytedeco.opencv.global.opencv_imgproc.cvtColor;
 
 @Log4j2
 @Service
@@ -33,23 +35,37 @@ public class FaceRecognitionService {
 
     private static final Path DATASET = Paths.get("trained_dataset.xml");
 
+    private final FaceDetector faceDetector;
+    private final DeepLearningFaceDetection deepLearningFaceDetection;
+
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
         faceRecognizer.read(DATASET.toString());
         return faceRecognizer;
     }
 
-    public Object[] test(FaceRecognizer faceRecognizer, String testFIle) {
-        Mat testImage = imread(testFIle, IMREAD_GRAYSCALE);
+    public Object[] test(FaceRecognizer faceRecognizer, String testFIle) throws Exception {
+//        faceDetector.detectFace(testFIle);
+        Mat testImage = imread(testFIle/*,IMREAD_GRAYSCALE*/);
+        testImage = deepLearningFaceDetection.detectAndDraw(testImage);
+//        imwrite("cortada.jpg", testImage);
+        testImage = convertToGray(testImage);
         IntPointer label = new IntPointer(1);
         DoublePointer confidence = new DoublePointer(1);
         faceRecognizer.predict(testImage, label, confidence);
         return new Object[] {label.get(0), confidence.get(0)};
     }
 
+    @NotNull
+    private static Mat convertToGray(Mat testImage) {
+        Mat target = new Mat();
+        cvtColor(testImage, target, COLOR_RGB2GRAY);
+        return target;
+    }
+
     public FaceRecognizer train(String root) throws IOException {
         Path rootFolder = Paths.get(root);
-        Map<Path, String> fileList = Files.list(rootFolder).
+        Map<Path, Object[]> fileList = Files.list(rootFolder).
                 filter(file -> file.toFile().isDirectory()).
                 flatMap(folder -> {
                     try {
@@ -58,26 +74,40 @@ public class FaceRecognitionService {
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
-                }).collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
+                }).
+                map(entry -> {
+                    File image = entry.getKey().toFile();
+
+                    Mat img = imread(image.getAbsolutePath()/*, IMREAD_GRAYSCALE*/);
+                    Mat face = deepLearningFaceDetection.detectAndDraw(img);
+
+                    if(face == null) {
+                        return null;
+                    }
+
+                    return Map.entry(entry.getKey(), new Object[]{face, entry.getValue()});
+                }).
+                filter(entry -> entry != null).
+                collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         MatVector images = new MatVector(fileList.size());
 
-        List<String> strLabels = fileList.values().stream().distinct().toList();
+        List<String> strLabels = fileList.values().stream().map(data -> (String)data[1]).distinct().toList();
 
         Mat labels = new Mat(fileList.size(), 1, CV_32SC1);
         IntBuffer labelsBuf = labels.createBuffer();
 
         final AtomicInteger counter = new AtomicInteger();
 
-        fileList.keySet().forEach((Path key) -> {
+        fileList.keySet().forEach(path -> {
 
-            File image = key.toFile();
+            Object[] data = fileList.get(path);
 
-            Mat img = imread(image.getAbsolutePath(), IMREAD_GRAYSCALE);
+            Mat img = convertToGray((Mat)data[0]);
 
             images.put(counter.get(), img);
 
-            int imgLabel = strLabels.indexOf(fileList.get(key));
+            int imgLabel = strLabels.indexOf(data[1]);
 
             labelsBuf.put(counter.get(), imgLabel);
 
