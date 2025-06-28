@@ -10,6 +10,11 @@ import org.bytedeco.opencv.opencv_imgproc.*;
 import org.bytedeco.opencv.opencv_videoio.*;
 import org.springframework.stereotype.Service;
 
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
 import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_dnn.*;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
@@ -39,14 +44,19 @@ import static org.bytedeco.opencv.global.opencv_videoio.*;
 @Service
 public class DeepLearningFaceDetection {
 
-    private static final String PROTO_FILE = "deploy.prototxt";
-    private static final String CAFFE_MODEL_FILE = "res10_300x300_ssd_iter_140000.caffemodel";
+    private static final String PROTO_FILE = "opencv/deploy.prototxt";
+    private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
     private static final OpenCVFrameConverter.ToIplImage converter = new OpenCVFrameConverter.ToIplImage();
     private static Net net = null;
     static int counter = 0;
 
     static {
-        net = readNetFromCaffe(PROTO_FILE, CAFFE_MODEL_FILE);
+        try {
+            net = readNetFromCaffe(Path.of(ClassLoader.getSystemResource(PROTO_FILE).toURI()).toString(),
+                    Path.of(ClassLoader.getSystemResource(CAFFE_MODEL_FILE).toURI()).toString());
+        } catch (URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public Mat detectAndDraw(Mat image) {//detect faces and draw a blue rectangle arroung each face
