@@ -14,6 +14,8 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_dnn.*;
@@ -59,7 +61,9 @@ public class DeepLearningFaceDetection {
         }
     }
 
-    public Mat detectAndDraw(Mat image) {//detect faces and draw a blue rectangle arroung each face
+    public List<Mat> detectAndDraw(Mat image) {//detect faces and draw a blue rectangle arroung each face
+
+        List<Mat> faces = new ArrayList<>();
 
         resize(image, image, new Size(300, 300));//resize the image to match the input size of the model
 
@@ -89,10 +93,10 @@ public class DeepLearningFaceDetection {
 //                rectangle(image, rect, new Scalar(255, 0, 0, 0));//print blue rectangle
                 Mat img = new Mat(image, rect);
 //                imwrite("retangulo.jpg", image);
-                return img;
+                faces.add(img);
             }
         }
-        return null;
+        return faces;
     }
 
     public static void main(String[] args) {
@@ -114,18 +118,19 @@ public class DeepLearningFaceDetection {
 
         while (true) {
             while (capture.read(colorimg) && mainframe.isVisible()) {
-                Mat img = new DeepLearningFaceDetection().detectAndDraw(colorimg);
-                if(img == null) {
-                    continue;
-                }
-                imwrite("test"+(counter++)+".jpg",img);
-                mainframe.showImage(converter.convert(colorimg));
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException ex) {
-                    System.out.println(ex.getMessage());
-                }
+                List<Mat> imgs = new DeepLearningFaceDetection().detectAndDraw(colorimg);
 
+                imgs.forEach(
+                        img -> {
+                            imwrite("test"+(counter++)+".jpg",img);
+                            mainframe.showImage(converter.convert(colorimg));
+                            try {
+                                Thread.sleep(50);
+                            } catch (InterruptedException ex) {
+                                System.out.println(ex.getMessage());
+                            }
+                        }
+                );
             }
         }
     }

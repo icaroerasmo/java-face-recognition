@@ -43,23 +43,16 @@ public class FaceRecognitionService {
         return faceRecognizer;
     }
 
-    public Object[] test(FaceRecognizer faceRecognizer, String testFIle) throws Exception {
-//        faceDetector.detectFace(testFIle);
+    public List<Object[]> test(FaceRecognizer faceRecognizer, String testFIle) throws Exception {
         Mat testImage = imread(testFIle/*,IMREAD_GRAYSCALE*/);
-        testImage = deepLearningFaceDetection.detectAndDraw(testImage);
-//        imwrite("cortada.jpg", testImage);
-        testImage = convertToGray(testImage);
-        IntPointer label = new IntPointer(1);
-        DoublePointer confidence = new DoublePointer(1);
-        faceRecognizer.predict(testImage, label, confidence);
-        return new Object[] {label.get(0), confidence.get(0)};
-    }
-
-    @NotNull
-    private static Mat convertToGray(Mat testImage) {
-        Mat target = new Mat();
-        cvtColor(testImage, target, COLOR_RGB2GRAY);
-        return target;
+        return deepLearningFaceDetection.detectAndDraw(testImage).stream().map(img -> {
+            //        imwrite("cortada.jpg", testImage);
+            img = convertToGray(img);
+            IntPointer label = new IntPointer(1);
+            DoublePointer confidence = new DoublePointer(1);
+            faceRecognizer.predict(img, label, confidence);
+            return new Object[] {label.get(0), confidence.get(0)};
+        }).toList();
     }
 
     public FaceRecognizer train(String root) throws IOException {
@@ -78,7 +71,7 @@ public class FaceRecognitionService {
                     File image = entry.getKey().toFile();
 
                     Mat img = imread(image.getAbsolutePath()/*, IMREAD_GRAYSCALE*/);
-                    Mat face = deepLearningFaceDetection.detectAndDraw(img);
+                    Mat face = deepLearningFaceDetection.detectAndDraw(img).get(0);
 
                     if(face == null) {
                         return null;
@@ -126,5 +119,11 @@ public class FaceRecognitionService {
         faceRecognizer.write(DATASET.toString());
 
         return faceRecognizer;
+    }
+
+    private static Mat convertToGray(Mat testImage) {
+        Mat target = new Mat();
+        cvtColor(testImage, target, COLOR_RGB2GRAY);
+        return target;
     }
 }
