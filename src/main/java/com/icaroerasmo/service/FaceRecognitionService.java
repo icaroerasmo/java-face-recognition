@@ -35,7 +35,6 @@ public class FaceRecognitionService {
 
     private static final Path DATASET = Paths.get("trained_dataset.xml");
 
-    private final FaceDetector faceDetector;
     private final DeepLearningFaceDetection deepLearningFaceDetection;
 
     public FaceRecognizer load() {
