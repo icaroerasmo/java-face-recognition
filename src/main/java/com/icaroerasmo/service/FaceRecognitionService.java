@@ -80,12 +80,15 @@ public class FaceRecognitionService {
                     File image = entry.getKey().toFile();
 
                     Mat img = imread(image.getAbsolutePath()/*, IMREAD_GRAYSCALE*/);
-                    Rect faceRect = deepLearningFaceDetectionService.detect(img).get(0);
-                    Mat face = new Mat(img, faceRect);
 
-                    if(face == null) {
+                    List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
+
+                    if(facesList.isEmpty()) {
                         return null;
                     }
+
+                    Rect faceRect = facesList.get(0);
+                    Mat face = new Mat(img, faceRect);
 
                     return Map.entry(entry.getKey(), new Object[]{face, entry.getValue()});
                 }).
