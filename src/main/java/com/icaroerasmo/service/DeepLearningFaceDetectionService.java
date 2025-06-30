@@ -56,7 +56,9 @@ public class DeepLearningFaceDetectionService {
         }
     }
 
-    public List<Rect> detect(Mat image) {//detect faces and draw a blue rectangle arroung each face
+    public List<Rect> detect(Mat testImage) {//detect faces and draw a blue rectangle arroung each face
+
+        final Mat image = new Mat(testImage);
 
         List<Rect> faces = new ArrayList<>();
 
@@ -85,9 +87,21 @@ public class DeepLearningFaceDetectionService {
                 float bx = f3 * 300;//bottom right point's x
                 float by = f4 * 300;//bottom right point's y
                 Rect rect = new Rect(new Point((int) tx, (int) ty), new Point((int) bx, (int) by));
-                faces.add(rect);
+                faces.add(transformRect(testImage, rect));
             }
         }
         return faces;
+    }
+
+    private Rect transformRect(Mat originalImg, Rect rect) {
+        int[] tl = calculateNewPoints(originalImg.size().width(), originalImg.size().height(), rect.tl().x(), rect.tl().y());
+        int[] br = calculateNewPoints(originalImg.size().width(), originalImg.size().height(), rect.br().x(), rect.br().y());
+        return new Rect(new Point(tl[0], tl[1]), new Point(br[0], br[1]));
+    }
+
+    private int[] calculateNewPoints(double originalWidth, double originalHeight, double x, double y) {
+        double newX = (x/300)*originalWidth;
+        double newY = (y/300)*originalHeight;
+        return new int[]{(int) newX, (int) newY};
     }
 }

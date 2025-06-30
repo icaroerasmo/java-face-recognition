@@ -4,6 +4,7 @@ import com.icaroerasmo.model.FaceRecognition;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.*;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.stereotype.Service;
 import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
@@ -42,9 +43,11 @@ public class FaceRecognitionService {
     }
 
     public FaceRecognition test(FaceRecognizer faceRecognizer, String testFile) throws Exception {
-
         final Mat testImage = imread(testFile/*,IMREAD_GRAYSCALE*/);
+        return test(faceRecognizer, testImage);
+    }
 
+    public FaceRecognition test(FaceRecognizer faceRecognizer, Mat testImage) {
         List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
             final Mat img = convertToGray(new Mat(testImage, faceRect));
 
@@ -56,10 +59,14 @@ public class FaceRecognitionService {
             final String detectedPerson = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
             final double detectionConfidence = confidencePtr.get(0);
 
+            if(detectionConfidence > 188) {
+                return null;
+            }
+
             drawRectangleAndName(testImage, detectedPerson, faceRect);
 
             return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence);
-        }).toList();
+        }).filter(detected -> detected != null).toList();
 
         return new FaceRecognition(detectedFaces, testImage);
     }
