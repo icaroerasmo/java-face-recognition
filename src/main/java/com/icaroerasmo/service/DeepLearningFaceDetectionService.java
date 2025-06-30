@@ -6,14 +6,11 @@ import org.bytedeco.javacv.OpenCVFrameConverter;
 
 import org.bytedeco.opencv.opencv_core.*;
 import org.bytedeco.opencv.opencv_dnn.*;
-import org.bytedeco.opencv.opencv_imgproc.*;
 import org.bytedeco.opencv.opencv_videoio.*;
 import org.springframework.stereotype.Service;
 
 import java.net.URISyntaxException;
-import java.net.URL;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -44,13 +41,11 @@ import static org.bytedeco.opencv.global.opencv_videoio.*;
  *
  */
 @Service
-public class DeepLearningFaceDetection {
+public class DeepLearningFaceDetectionService {
 
     private static final String PROTO_FILE = "opencv/deploy.prototxt";
     private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
-    private static final OpenCVFrameConverter.ToIplImage converter = new OpenCVFrameConverter.ToIplImage();
     private static Net net = null;
-    static int counter = 0;
 
     static {
         try {
@@ -61,9 +56,9 @@ public class DeepLearningFaceDetection {
         }
     }
 
-    public List<Mat> detectAndDraw(Mat image) {//detect faces and draw a blue rectangle arroung each face
+    public List<Rect> detect(Mat image) {//detect faces and draw a blue rectangle arroung each face
 
-        List<Mat> faces = new ArrayList<>();
+        List<Rect> faces = new ArrayList<>();
 
         resize(image, image, new Size(300, 300));//resize the image to match the input size of the model
 
@@ -90,48 +85,9 @@ public class DeepLearningFaceDetection {
                 float bx = f3 * 300;//bottom right point's x
                 float by = f4 * 300;//bottom right point's y
                 Rect rect = new Rect(new Point((int) tx, (int) ty), new Point((int) bx, (int) by));
-//                rectangle(image, rect, new Scalar(255, 0, 0, 0));//print blue rectangle
-                Mat img = new Mat(image, rect);
-//                imwrite("retangulo.jpg", image);
-                faces.add(img);
+                faces.add(rect);
             }
         }
         return faces;
-    }
-
-    public static void main(String[] args) {
-        VideoCapture capture = new VideoCapture();
-        capture.set(CAP_PROP_FRAME_WIDTH, 1280);
-        capture.set(CAP_PROP_FRAME_HEIGHT, 720);
-
-        if (!capture.open(0)) {
-            System.out.println("Can not open the cam !!!");
-        }
-
-        Mat colorimg = new Mat();
-
-        CanvasFrame mainframe = new CanvasFrame("Face Detection", CanvasFrame.getDefaultGamma() / 2.2);
-        mainframe.setDefaultCloseOperation(javax.swing.JFrame.EXIT_ON_CLOSE);
-        mainframe.setCanvasSize(600, 600);
-        mainframe.setLocationRelativeTo(null);
-        mainframe.setVisible(true);
-
-        while (true) {
-            while (capture.read(colorimg) && mainframe.isVisible()) {
-                List<Mat> imgs = new DeepLearningFaceDetection().detectAndDraw(colorimg);
-
-                imgs.forEach(
-                        img -> {
-                            imwrite("test"+(counter++)+".jpg",img);
-                            mainframe.showImage(converter.convert(colorimg));
-                            try {
-                                Thread.sleep(50);
-                            } catch (InterruptedException ex) {
-                                System.out.println(ex.getMessage());
-                            }
-                        }
-                );
-            }
-        }
     }
 }

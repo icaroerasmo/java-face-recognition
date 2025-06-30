@@ -1,13 +1,12 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.model.FaceRecognition;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.jetbrains.annotations.NotNull;
+import org.bytedeco.opencv.opencv_core.*;
 import org.springframework.stereotype.Service;
 import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
-import org.bytedeco.opencv.opencv_core.Mat;
-import org.bytedeco.opencv.opencv_core.MatVector;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.bytedeco.opencv.opencv_face.LBPHFaceRecognizer;
 
@@ -25,8 +24,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.toMap;
 import static org.bytedeco.opencv.global.opencv_core.CV_32SC1;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
-import static org.bytedeco.opencv.global.opencv_imgproc.COLOR_RGB2GRAY;
-import static org.bytedeco.opencv.global.opencv_imgproc.cvtColor;
+import static org.bytedeco.opencv.global.opencv_imgproc.*;
 
 @Log4j2
 @Service
@@ -35,7 +33,7 @@ public class FaceRecognitionService {
 
     private static final Path DATASET = Paths.get("trained_dataset.xml");
 
-    private final DeepLearningFaceDetection deepLearningFaceDetection;
+    private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
 
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
@@ -43,16 +41,27 @@ public class FaceRecognitionService {
         return faceRecognizer;
     }
 
-    public List<Object[]> test(FaceRecognizer faceRecognizer, String testFIle) throws Exception {
-        Mat testImage = imread(testFIle/*,IMREAD_GRAYSCALE*/);
-        return deepLearningFaceDetection.detectAndDraw(testImage).stream().map(img -> {
-            //        imwrite("cortada.jpg", testImage);
-            img = convertToGray(img);
-            IntPointer label = new IntPointer(1);
-            DoublePointer confidence = new DoublePointer(1);
-            faceRecognizer.predict(img, label, confidence);
-            return new Object[] {label.get(0), confidence.get(0)};
+    public FaceRecognition test(FaceRecognizer faceRecognizer, String testFile) throws Exception {
+
+        final Mat testImage = imread(testFile/*,IMREAD_GRAYSCALE*/);
+
+        List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
+            final Mat img = convertToGray(new Mat(testImage, faceRect));
+
+            IntPointer detectedPersonPtr = new IntPointer(1);
+            DoublePointer confidencePtr = new DoublePointer(1);
+
+            faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
+
+            final String detectedPerson = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
+            final double detectionConfidence = confidencePtr.get(0);
+
+            drawRectangleAndName(testImage, detectedPerson, faceRect);
+
+            return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence);
         }).toList();
+
+        return new FaceRecognition(detectedFaces, testImage);
     }
 
     public FaceRecognizer train(String root) throws IOException {
@@ -71,7 +80,8 @@ public class FaceRecognitionService {
                     File image = entry.getKey().toFile();
 
                     Mat img = imread(image.getAbsolutePath()/*, IMREAD_GRAYSCALE*/);
-                    Mat face = deepLearningFaceDetection.detectAndDraw(img).get(0);
+                    Rect faceRect = deepLearningFaceDetectionService.detect(img).get(0);
+                    Mat face = new Mat(img, faceRect);
 
                     if(face == null) {
                         return null;
@@ -125,5 +135,17 @@ public class FaceRecognitionService {
         Mat target = new Mat();
         cvtColor(testImage, target, COLOR_RGB2GRAY);
         return target;
+    }
+
+    private void drawRectangleAndName(Mat img, String text, Rect rect) {
+        int textX = rect.x(); // or adjust for centering
+        int textY = rect.y()+rect.height()+25; // offset to create space below rectangle.
+        int fontFace = FONT_HERSHEY_SIMPLEX;
+        double fontScale = 1.0;
+        Scalar color = new Scalar(76, 175, 80, 1);
+        int thicknessText = 2;
+        int lineType = LINE_8;
+        rectangle(img, rect, color, thicknessText, lineType, 0);
+        putText(img, text, new Point(textX, textY), fontFace, fontScale, color, thicknessText, lineType, false);
     }
 }
