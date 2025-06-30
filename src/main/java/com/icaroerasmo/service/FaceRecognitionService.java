@@ -59,7 +59,7 @@ public class FaceRecognitionService {
             final String detectedPerson = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
             final double detectionConfidence = confidencePtr.get(0);
 
-            if(detectionConfidence > 188) {
+            if(detectionConfidence > 60) {
                 return null;
             }
 
