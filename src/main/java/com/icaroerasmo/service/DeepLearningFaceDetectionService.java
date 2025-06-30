@@ -1,12 +1,9 @@
 package com.icaroerasmo.service;
 
 import org.bytedeco.javacpp.indexer.FloatIndexer;
-import org.bytedeco.javacv.CanvasFrame;
-import org.bytedeco.javacv.OpenCVFrameConverter;
 
 import org.bytedeco.opencv.opencv_core.*;
 import org.bytedeco.opencv.opencv_dnn.*;
-import org.bytedeco.opencv.opencv_videoio.*;
 import org.springframework.stereotype.Service;
 
 import java.net.URISyntaxException;
@@ -18,7 +15,6 @@ import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_dnn.*;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
 import static org.bytedeco.opencv.global.opencv_imgproc.*;
-import static org.bytedeco.opencv.global.opencv_videoio.*;
 
 /**
  * Created on Jul 28, 2018
@@ -43,6 +39,7 @@ import static org.bytedeco.opencv.global.opencv_videoio.*;
 @Service
 public class DeepLearningFaceDetectionService {
 
+    public static final int MODEL_INPUT_SIZE = 300;
     private static final String PROTO_FILE = "opencv/deploy.prototxt";
     private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
     private static Net net = null;
@@ -62,11 +59,11 @@ public class DeepLearningFaceDetectionService {
 
         List<Rect> faces = new ArrayList<>();
 
-        resize(image, image, new Size(300, 300));//resize the image to match the input size of the model
+        resize(image, image, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE));//resize the image to match the input size of the model
 
         //create a 4-dimensional blob from image with NCHW (Number of images in the batch -for training only-, Channel, Height, Width) dimensions order,
         //for more detailes read the official docs at https://docs.opencv.org/trunk/d6/d0f/group__dnn.html#gabd0e76da3c6ad15c08b01ef21ad55dd8
-        Mat blob = blobFromImage(image, 1.0, new Size(300, 300), new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
+        Mat blob = blobFromImage(image, 1.0, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
 
         net.setInput(blob);//set the input to network model
         Mat output = net.forward();//feed forward the input to the netwrok to get the output matrix
@@ -82,26 +79,22 @@ public class DeepLearningFaceDetectionService {
             float f3 = srcIndexer.get(i, 5);
             float f4 = srcIndexer.get(i, 6);
             if (confidence > .6) {
-                float tx = f1 * 300;//top left point's x
-                float ty = f2 * 300;//top left point's y
-                float bx = f3 * 300;//bottom right point's x
-                float by = f4 * 300;//bottom right point's y
-                Rect rect = new Rect(new Point((int) tx, (int) ty), new Point((int) bx, (int) by));
-                faces.add(transformRect(testImage, rect));
+                float tx = f1 * MODEL_INPUT_SIZE;//top left point's x
+                float ty = f2 * MODEL_INPUT_SIZE;//top left point's y
+                float bx = f3 * MODEL_INPUT_SIZE;//bottom right point's x
+                float by = f4 * MODEL_INPUT_SIZE;//bottom right point's y
+                faces.add(createReact(tx, ty, bx, by, testImage.size().width(), testImage.size().height()));
             }
         }
         return faces;
     }
 
-    private Rect transformRect(Mat originalImg, Rect rect) {
-        int[] tl = calculateNewPoints(originalImg.size().width(), originalImg.size().height(), rect.tl().x(), rect.tl().y());
-        int[] br = calculateNewPoints(originalImg.size().width(), originalImg.size().height(), rect.br().x(), rect.br().y());
-        return new Rect(new Point(tl[0], tl[1]), new Point(br[0], br[1]));
-    }
-
-    private int[] calculateNewPoints(double originalWidth, double originalHeight, double x, double y) {
-        double newX = (x/300)*originalWidth;
-        double newY = (y/300)*originalHeight;
-        return new int[]{(int) newX, (int) newY};
+    // Creates rect based on original image size that was resized due model input
+    private Rect createReact(float tx, float ty, float bx, float by, int width, int height) {
+        float newTx = (tx/ MODEL_INPUT_SIZE)*width;
+        float newTy = (ty/ MODEL_INPUT_SIZE)*height;
+        float newBx = (bx/ MODEL_INPUT_SIZE)*width;
+        float newBy = (by/ MODEL_INPUT_SIZE)*height;
+        return new Rect(new Point((int) newTx, (int) newTy), new Point((int) newBx, (int) newBy));
     }
 }
