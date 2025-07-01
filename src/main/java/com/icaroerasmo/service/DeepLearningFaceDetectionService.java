@@ -1,5 +1,7 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.utils.MatUtil;
+import lombok.RequiredArgsConstructor;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 
 import org.bytedeco.opencv.opencv_core.*;
@@ -37,12 +39,15 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  *
  */
 @Service
+@RequiredArgsConstructor
 public class DeepLearningFaceDetectionService {
 
     public static final int MODEL_INPUT_SIZE = 300;
     private static final String PROTO_FILE = "opencv/deploy.prototxt";
     private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
     private static Net net = null;
+
+    private final MatUtil matUtil;
 
     static {
         try {
@@ -55,37 +60,46 @@ public class DeepLearningFaceDetectionService {
 
     public List<Rect> detect(Mat testImage) {//detect faces and draw a blue rectangle arroung each face
 
-        final Mat image = new Mat(testImage);
-
         List<Rect> faces = new ArrayList<>();
 
-        resize(image, image, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE));//resize the image to match the input size of the model
+        Mat output = null, ne = null, blob = null, image = null;
 
-        //create a 4-dimensional blob from image with NCHW (Number of images in the batch -for training only-, Channel, Height, Width) dimensions order,
-        //for more detailes read the official docs at https://docs.opencv.org/trunk/d6/d0f/group__dnn.html#gabd0e76da3c6ad15c08b01ef21ad55dd8
-        Mat blob = blobFromImage(image, 1.0, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
+        try {
+            image = new Mat(testImage);
 
-        net.setInput(blob);//set the input to network model
-        Mat output = net.forward();//feed forward the input to the netwrok to get the output matrix
+            resize(image, image, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE));//resize the image to match the input size of the model
 
-        Mat ne = new Mat(new Size(output.size(3), output.size(2)), CV_32F, output.ptr(0, 0));//extract a 2d matrix for 4d output matrix with form of (number of detections x 7)
+            //create a 4-dimensional blob from image with NCHW (Number of images in the batch -for training only-, Channel, Height, Width) dimensions order,
+            //for more detailes read the official docs at https://docs.opencv.org/trunk/d6/d0f/group__dnn.html#gabd0e76da3c6ad15c08b01ef21ad55dd8
+            blob = blobFromImage(image, 1.0, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
 
-        FloatIndexer srcIndexer = ne.createIndexer(); // create indexer to access elements of the matric
+            net.setInput(blob);//set the input to network model
+            output = net.forward();//feed forward the input to the netwrok to get the output matrix
 
-        for (int i = 0; i < output.size(3); i++) {//iterate to extract elements
-            float confidence = srcIndexer.get(i, 2);
-            float f1 = srcIndexer.get(i, 3);
-            float f2 = srcIndexer.get(i, 4);
-            float f3 = srcIndexer.get(i, 5);
-            float f4 = srcIndexer.get(i, 6);
-            if (confidence > .6) {
-                float tx = f1 * MODEL_INPUT_SIZE;//top left point's x
-                float ty = f2 * MODEL_INPUT_SIZE;//top left point's y
-                float bx = f3 * MODEL_INPUT_SIZE;//bottom right point's x
-                float by = f4 * MODEL_INPUT_SIZE;//bottom right point's y
-                faces.add(createReact(tx, ty, bx, by, testImage.size().width(), testImage.size().height()));
+            ne = new Mat(new Size(output.size(3), output.size(2)), CV_32F, output.ptr(0, 0));//extract a 2d matrix for 4d output matrix with form of (number of detections x 7)
+
+            FloatIndexer srcIndexer = ne.createIndexer(); // create indexer to access elements of the matric
+
+            for (int i = 0; i < output.size(3); i++) {//iterate to extract elements
+                float confidence = srcIndexer.get(i, 2);
+                float f1 = srcIndexer.get(i, 3);
+                float f2 = srcIndexer.get(i, 4);
+                float f3 = srcIndexer.get(i, 5);
+                float f4 = srcIndexer.get(i, 6);
+                if (confidence > .6) {
+                    float tx = f1 * MODEL_INPUT_SIZE;//top left point's x
+                    float ty = f2 * MODEL_INPUT_SIZE;//top left point's y
+                    float bx = f3 * MODEL_INPUT_SIZE;//bottom right point's x
+                    float by = f4 * MODEL_INPUT_SIZE;//bottom right point's y
+                    faces.add(createReact(tx, ty, bx, by, testImage.size().width(), testImage.size().height()));
+                }
             }
+        } catch (Exception e) {
+            throw new RuntimeException("Error during face detection", e);
+        } finally {
+            matUtil.releaseResources(ne, output, blob, image);
         }
+
         return faces;
     }
 

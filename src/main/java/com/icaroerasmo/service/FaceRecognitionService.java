@@ -1,6 +1,7 @@
 package com.icaroerasmo.service;
 
 import com.icaroerasmo.model.FaceRecognition;
+import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.*;
@@ -25,7 +26,6 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.toMap;
 import static org.bytedeco.opencv.global.opencv_core.CV_32SC1;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
-import static org.bytedeco.opencv.global.opencv_imgproc.*;
 
 @Log4j2
 @Service
@@ -33,8 +33,11 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
 public class FaceRecognitionService {
 
     private static final Path DATASET = Paths.get("trained_dataset.xml");
+    public static final int MIN_SCORE = 35;
+    public static final String UNKNOWN = "Unknown";
 
     private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
+    private final MatUtil matUtil;
 
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
@@ -49,23 +52,39 @@ public class FaceRecognitionService {
 
     public FaceRecognition test(FaceRecognizer faceRecognizer, Mat testImage) {
         List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
-            final Mat img = convertToGray(new Mat(testImage, faceRect));
 
-            IntPointer detectedPersonPtr = new IntPointer(1);
-            DoublePointer confidencePtr = new DoublePointer(1);
+            Mat img = null;
 
-            faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
+            try {
+                img = matUtil.convertToGray(new Mat(testImage, faceRect));
 
-            final String detectedPerson = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
-            final double detectionConfidence = confidencePtr.get(0);
+                IntPointer detectedPersonPtr = new IntPointer(1);
+                DoublePointer confidencePtr = new DoublePointer(1);
 
-            if(detectionConfidence > 60) {
-                return null;
+                faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
+
+                String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
+                String detectedPerson = label.substring(0, label.length() - 1); // Remove the last character which is a space
+                double detectionConfidence = confidencePtr.get(0);
+
+                if (detectionConfidence > MIN_SCORE) {
+                    log.debug("Detected person is {} with confidence {}" +
+                                    " but score is bigger than {} so result is {}.",
+                            detectedPerson, detectionConfidence, MIN_SCORE, UNKNOWN);
+                    detectedPerson = UNKNOWN;
+                } else {
+                    log.info("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
+                }
+
+                matUtil.drawRectangleAndName(testImage, detectedPerson, faceRect);
+
+                return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence);
+            } catch(Exception e) {
+                log.error("Error processing face detection", e);
+                throw new RuntimeException("Error processing face detection", e);
+            } finally {
+                matUtil.releaseResources(img);
             }
-
-            drawRectangleAndName(testImage, detectedPerson, faceRect);
-
-            return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence);
         }).filter(detected -> detected != null).toList();
 
         return new FaceRecognition(detectedFaces, testImage);
@@ -97,6 +116,8 @@ public class FaceRecognitionService {
                     Rect faceRect = facesList.get(0);
                     Mat face = new Mat(img, faceRect);
 
+                    matUtil.releaseResources(img);
+
                     return Map.entry(entry.getKey(), new Object[]{face, entry.getValue()});
                 }).
                 filter(entry -> entry != null).
@@ -115,7 +136,7 @@ public class FaceRecognitionService {
 
             Object[] data = fileList.get(path);
 
-            Mat img = convertToGray((Mat)data[0]);
+            Mat img = matUtil.convertToGray((Mat)data[0]);
 
             images.put(counter.get(), img);
 
@@ -138,24 +159,8 @@ public class FaceRecognitionService {
 
         faceRecognizer.write(DATASET.toString());
 
+        matUtil.clearMatVector(images);
+
         return faceRecognizer;
-    }
-
-    private static Mat convertToGray(Mat testImage) {
-        Mat target = new Mat();
-        cvtColor(testImage, target, COLOR_RGB2GRAY);
-        return target;
-    }
-
-    private void drawRectangleAndName(Mat img, String text, Rect rect) {
-        int textX = rect.x(); // or adjust for centering
-        int textY = rect.y()+rect.height()+25; // offset to create space below rectangle.
-        int fontFace = FONT_HERSHEY_SIMPLEX;
-        double fontScale = 1.0;
-        Scalar color = new Scalar(76, 175, 80, 1);
-        int thicknessText = 2;
-        int lineType = LINE_8;
-        rectangle(img, rect, color, thicknessText, lineType, 0);
-        putText(img, text, new Point(textX, textY), fontFace, fontScale, color, thicknessText, lineType, false);
     }
 }
