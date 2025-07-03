@@ -33,7 +33,7 @@ import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
 public class FaceRecognitionService {
 
     private static final Path DATASET = Paths.get("trained_dataset.xml");
-    public static final int MIN_SCORE = 35;
+    public static final int MIN_SCORE = 40;
     public static final String UNKNOWN = "Unknown";
 
     private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
@@ -51,6 +51,7 @@ public class FaceRecognitionService {
     }
 
     public FaceRecognition test(FaceRecognizer faceRecognizer, Mat testImage) {
+
         List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
 
             Mat img = null;
@@ -76,9 +77,7 @@ public class FaceRecognitionService {
                     log.info("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
                 }
 
-                matUtil.drawRectangleAndName(testImage, detectedPerson, faceRect);
-
-                return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence);
+                return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
             } catch(Exception e) {
                 log.error("Error processing face detection", e);
                 throw new RuntimeException("Error processing face detection", e);

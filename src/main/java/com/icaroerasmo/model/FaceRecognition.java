@@ -3,6 +3,7 @@ package com.icaroerasmo.model;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Rect;
 
 import java.util.List;
 
@@ -17,5 +18,6 @@ public class FaceRecognition {
     public static class DetectedFaces {
         private String personName;
         private Double confidence;
+        private Rect faceRect;
     }
 }
