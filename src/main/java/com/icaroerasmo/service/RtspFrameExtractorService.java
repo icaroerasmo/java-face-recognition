@@ -25,9 +25,7 @@ import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
 public class RtspFrameExtractorService {
 
     @SneakyThrows
-    public void extract(Consumer<Mat> consumer) {
-        String rtspUrl = "rtsp://localhost:8554/backyard?video&audio";
-
+    public void extract(String rtspUrl, Consumer<Mat> consumer) {
         av_log_set_level(AV_LOG_PANIC);
 
         FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(rtspUrl);
