@@ -13,12 +13,12 @@ import java.util.concurrent.ConcurrentHashMap;
 @Log4j2
 @Service
 public class DetectionService {
-    private static final int MIN_DETECTION_WINDOW_SECONDS = 3;
+    private static final int MIN_DETECTION_WINDOW_SECONDS = 10;
     private static final int MIN_DETECTIONS = 5;
     private static final String UNKNOWN = "Unknown";
 
-    private final Map<String, List<DetectionRecord>> detectionBuffer = new ConcurrentHashMap<>();
-    private final Map<String, Boolean> announceFlags = new ConcurrentHashMap<>();
+    private static final Map<String, List<DetectionRecord>> detectionBuffer = new ConcurrentHashMap<>();
+    private static final Map<String, Boolean> announceFlags = new ConcurrentHashMap<>();
 
     public boolean shouldAnnounceDetection(String personName, Double score) {
         if (personName == null || score == null) {
@@ -42,14 +42,17 @@ public class DetectionService {
             cleanOldDetections(personName, now);
             Instant windowStart = now.minusSeconds(MIN_DETECTION_WINDOW_SECONDS);
             long recentDetections = detections.stream()
-                    .filter(d -> !d.getTimestamp().isBefore(windowStart))
+                    .filter(d -> d.getPersonName().equals(personName) &&
+                            !d.getTimestamp().isBefore(windowStart))
                     .count();
 
             if (recentDetections < MIN_DETECTIONS) {
-                if (!UNKNOWN.equals(personName) || !hasOtherDetections) {
+                if (!UNKNOWN.equalsIgnoreCase(personName) || !hasOtherDetections) {
                     announceFlags.put(personName, true);
                 }
-                detections.clear();
+                detections.removeIf(
+                        d -> d.getPersonName().equals(personName) &&
+                                !d.getTimestamp().isBefore(windowStart));
             } else {
                 announceFlags.put(personName, false);
             }

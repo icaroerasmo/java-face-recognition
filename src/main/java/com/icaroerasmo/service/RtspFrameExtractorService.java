@@ -42,8 +42,6 @@ public class RtspFrameExtractorService {
                     Mat img = (Mat) converter.convert(frame);
                     consumer.accept(img);
                 }
-
-                frame.close();
             }
 
         } catch (FFmpegFrameGrabber.Exception e) {

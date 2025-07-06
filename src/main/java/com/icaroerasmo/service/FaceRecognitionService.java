@@ -74,7 +74,7 @@ public class FaceRecognitionService {
                             detectedPerson, detectionConfidence, MIN_SCORE, UNKNOWN);
                     detectedPerson = UNKNOWN;
                 } else {
-                    log.info("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
+                    log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
                 }
 
                 return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
