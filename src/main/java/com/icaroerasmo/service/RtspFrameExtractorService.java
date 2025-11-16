@@ -29,18 +29,40 @@ public class RtspFrameExtractorService {
         av_log_set_level(AV_LOG_PANIC);
 
         FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(rtspUrl);
+        OpenCVFrameConverter.ToMat converter = new OpenCVFrameConverter.ToMat();
 
         try {
 
             grabber.start();
 
-            OpenCVFrameConverter converter = new OpenCVFrameConverter.ToMat();
+            while (true) {
+                Frame frame = null;
+                try {
+                    frame = grabber.grab();
 
-            while(!grabber.isCloseInputStream()) {
-                Frame frame = grabber.grab();
-                if (frame != null && frame.image != null) {
-                    Mat img = (Mat) converter.convert(frame);
-                    consumer.accept(img);
+                    // End of stream
+                    if (frame == null) {
+                        break;
+                    }
+
+                    if (frame.image != null) {
+                        // Convert frame to Mat and clone it so the Mat is independent of the Frame's native memory.
+                        Mat nativeMat = (Mat) converter.convert(frame);
+                        Mat img = nativeMat.clone();
+
+                        // release the nativeMat copy (backed by Frame) to avoid holding native buffers
+                        if (nativeMat != null) {
+                            try { nativeMat.release(); } catch (Exception ignore) {}
+                        }
+
+                        // Pass cloned Mat to consumer. Consumer is responsible for releasing the Mat when done.
+                        consumer.accept(img);
+                    }
+                } finally {
+                    // Ensure frame native resources are released
+                    if (frame != null) {
+                        try { frame.close(); } catch (Exception ignore) {}
+                    }
                 }
             }
 
@@ -48,6 +70,25 @@ public class RtspFrameExtractorService {
             throw new RuntimeException(e);
         } catch (IOException e) {
             throw new RuntimeException(e);
+        } finally {
+            // Ensure grabber is stopped and released to free native resources
+            try {
+                if (grabber != null) {
+                    try { grabber.stop(); } catch (Exception ignore) {}
+                    try { grabber.release(); } catch (Exception ignore) {}
+                    try { grabber.close(); } catch (Exception ignore) {}
+                }
+            } catch (Exception ignored) {
+            }
+
+            // converter doesn't have an explicit close, but help GC by nulling reference (no-op here)
+            converter = null;
+
+            // Suggest running finalization and GC to help free native memory more quickly
+            try {
+                System.runFinalization();
+                System.gc();
+            } catch (Exception ignore) {}
         }
     }
 }
