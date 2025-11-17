@@ -43,7 +43,7 @@ public class FaceRecognitionService {
     private final TrainingMetadataRepository trainingMetadataRepository;
     private final TrainedDatasetRepository trainedDatasetRepository;
 
-    public static final int MIN_SCORE = 40;
+    public static final int MIN_SCORE = 50;
     public static final String UNKNOWN = "Unknown";
 
     public FaceRecognizer load() {
@@ -94,6 +94,19 @@ public class FaceRecognitionService {
                     detectedPerson = UNKNOWN;
                 } else {
                     log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
+
+                    // Save image with person's name when recognized
+                    try {
+                        Mat faceImg = new Mat(testImage, faceRect);
+                        String filename = String.format("recognized_%s_%d.jpg",
+                            detectedPerson.replaceAll("[^a-zA-Z0-9]", "_"),
+                            System.currentTimeMillis());
+                        imwrite(filename, faceImg);
+                        log.info("Saved recognized face: {}", filename);
+                        matUtil.releaseResources(faceImg);
+                    } catch (Exception ex) {
+                        log.warn("Failed to save recognized face image", ex);
+                    }
                 }
 
                 return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
