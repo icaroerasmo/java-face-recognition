@@ -11,11 +11,10 @@ import lombok.Setter;
 public class TrainedDataset {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
-    private Long id;
+    @Column(name = "id")
+    private Long id = 1L;
 
     @Lob
     @Column(name = "model_xml", nullable = false)
     private byte[] modelXml;
 }
-

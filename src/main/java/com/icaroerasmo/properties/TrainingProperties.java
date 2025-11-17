@@ -21,6 +21,6 @@ public class TrainingProperties {
      * Classpath folder that contains the training dataset images.
      * Default: "training" under src/main/resources.
      */
-    private String rootFolder = "training";
+    private String rootFolder = "train";
 }
 

@@ -21,3 +21,12 @@ logging:
   level:
     root: INFO
     com.icaroerasmo: DEBUG
+
+face-recognition:
+  streams:
+    rtsp-urls:
+      - "rtsp://192.168.3.35:554/h264/ch1/main/av_stream"
+      # - "rtsp://another-camera/stream"  # example additional camera
+  training:
+    dataset-path: "trained_dataset.xml"
+    root-folder: "train"

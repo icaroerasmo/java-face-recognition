@@ -69,11 +69,6 @@ public class FaceRecognitionService {
         return faceRecognizer;
     }
 
-    public FaceRecognition test(FaceRecognizer faceRecognizer, String testFile) throws Exception {
-        final Mat testImage = imread(testFile/*,IMREAD_GRAYSCALE*/);
-        return test(faceRecognizer, testImage);
-    }
-
     public FaceRecognition test(FaceRecognizer faceRecognizer, Mat testImage) {
 
         List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
@@ -128,15 +123,16 @@ public class FaceRecognitionService {
                 .map(entry -> {
                     File image = entry.getKey().toFile();
 
-                    Mat img = imread(image.getAbsolutePath() /*, IMREAD_GRAYSCALE*/);
+                    Mat img = imread(image.getAbsolutePath());
 
+                    // Pass false to avoid saving debug frames during training
                     List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
 
                     if (facesList.isEmpty()) {
                         return null;
                     }
 
-                    Rect faceRect = facesList.get(0);
+                    Rect faceRect = facesList.getFirst();
                     Mat face = new Mat(img, faceRect);
 
                     matUtil.releaseResources(img);

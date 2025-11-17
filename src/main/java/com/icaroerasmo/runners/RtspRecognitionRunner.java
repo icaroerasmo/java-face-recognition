@@ -17,8 +17,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,8 +25,6 @@ import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.toMap;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
-import static org.bytedeco.opencv.global.opencv_imgproc.resize;
-import org.bytedeco.opencv.opencv_core.Size;
 
 @Log4j2
 @Component
@@ -50,12 +46,10 @@ public class RtspRecognitionRunner {
 
         try {
             File trainingRootDir = getTrainedFile();
-            // ensureTrained will compare hashes vs metadata and retrain if needed
             faceRecognizer = faceRecognitionService.ensureTrained(trainingRootDir.toPath());
 
-            final FaceRecognizer finalFaceRecognizer = faceRecognizer; // for lambda capture
+            final FaceRecognizer finalFaceRecognizer = faceRecognizer;
 
-            // Use all RTSP URLs from configuration instead of a single hard-coded value
             List<String> urls = streamsProperties.getRtspUrls();
             if (urls == null || urls.isEmpty()) {
                 throw new IllegalStateException("No RTSP URLs configured under face-recognition.streams.rtsp-urls");
@@ -87,31 +81,10 @@ public class RtspRecognitionRunner {
                         List<FaceRecognition.DetectedFaces> faces = faceRecognition.getFaces();
 
                         if (faces == null || faces.isEmpty()) {
-                            log.debug("No faces detected in the image.");
                             return;
                         }
 
                         final Map<String, Boolean> shouldAnnounceMap = faces.parallelStream().
-                                peek(output -> {
-                                    String label = output.getPersonName();
-                                    if (label != null && output.getFaceRect() != null) {
-                                        Mat roiClone = null;
-                                        Mat resized = null;
-                                        try {
-                                            roiClone = img.clone();
-                                            Size newSize = new Size(roiClone.cols() / 2, roiClone.rows() / 2);
-                                            resized = new Mat();
-                                            resize(roiClone, resized, newSize);
-
-                                            matUtil.drawRectangleAndName(resized, label, output.getFaceRect());
-                                            imwrite("img_%s_%d_.jpg".formatted(label, COUNT.getAndIncrement()), resized);
-                                        } catch (Exception ex) {
-                                            log.warn("Error while writing or drawing detection image", ex);
-                                        } finally {
-                                            matUtil.releaseResources(roiClone, resized);
-                                        }
-                                    }
-                                }).
                                 map(output -> Map.entry(
                                         output.getPersonName(),
                                         detectionService.shouldAnnounceDetection(
@@ -131,26 +104,24 @@ public class RtspRecognitionRunner {
                                     .map(FaceRecognition.DetectedFaces::getPersonName)
                                     .collect(Collectors.joining());
                             log.info("Pessoas detectadas: {}", names);
-                            try {
-                                Mat finalImg = new Mat();
-                                Size finalSize = new Size(img.cols() / 2, img.rows() / 2);
-                                resize(img, finalImg, finalSize);
 
+                            // Save images ONLY when people are recognized
+                            try {
+                                Mat finalImg = img.clone();
                                 faces.forEach(output -> {
                                     if (output.getFaceRect() != null && output.getPersonName() != null) {
                                         matUtil.drawRectangleAndName(finalImg, output.getPersonName(), output.getFaceRect());
                                     }
                                 });
                                 imwrite("img_%s_%d_.jpg".formatted("final", COUNT.getAndIncrement()), finalImg);
-
                                 matUtil.releaseResources(finalImg);
                             } catch (Exception e) {
-                                log.warn("Couldn't write final image", e);
+                                // Silently ignore
                             }
                         }
 
                     } catch (Exception e) {
-                        log.error("Error processing frame", e);
+                        // Silently ignore
                     } finally {
                         try {
                             Mat detectionImg = null;
@@ -158,10 +129,9 @@ public class RtspRecognitionRunner {
                                 detectionImg = faceRecognition.getDetectionImg();
                             }
                             matUtil.releaseResources(img, detectionImg);
-
                             faceRecognition = null;
                         } catch (Exception releaseEx) {
-                            log.warn("Error releasing Mats", releaseEx);
+                            // Silently ignore
                         }
                     }
                 });
@@ -195,3 +165,4 @@ public class RtspRecognitionRunner {
         return trainingRootDir;
     }
 }
+

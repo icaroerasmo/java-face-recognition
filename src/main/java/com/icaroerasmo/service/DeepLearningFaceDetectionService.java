@@ -2,6 +2,7 @@ package com.icaroerasmo.service;
 
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 
 import org.bytedeco.opencv.opencv_core.*;
@@ -38,6 +39,7 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  * https://github.com/opencv/opencv_3rdparty/blob/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel
  *
  */
+@Log4j2
 @Service
 @RequiredArgsConstructor
 public class DeepLearningFaceDetectionService {
@@ -94,6 +96,7 @@ public class DeepLearningFaceDetectionService {
                     faces.add(createReact(tx, ty, bx, by, testImage.size().width(), testImage.size().height()));
                 }
             }
+
         } catch (Exception e) {
             throw new RuntimeException("Error during face detection", e);
         } finally {

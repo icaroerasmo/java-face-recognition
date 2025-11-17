@@ -15,7 +15,8 @@ import java.time.Instant;
 public class TrainingMetadata {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id")
     private Long id;
 
     @Column(name = "person_name", nullable = false)
