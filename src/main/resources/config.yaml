@@ -1,0 +1,4 @@
+face-recognition:
+  streams:
+    rtsp-url: "rtsp://localhost:8554/backyard?video&audio"
+
