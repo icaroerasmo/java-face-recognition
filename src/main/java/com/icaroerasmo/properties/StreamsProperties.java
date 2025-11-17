@@ -15,7 +15,7 @@ import java.util.List;
 public class StreamsProperties {
 
     /**
-     * RTSP URLs used by the recognition pipeline (one or more cameras).
+     * Camera configurations with name and RTSP URL
      */
-    private List<String> rtspUrls = new ArrayList<>();
+    private List<Camera> cameras = new ArrayList<>();
 }

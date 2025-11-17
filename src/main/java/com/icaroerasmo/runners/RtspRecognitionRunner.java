@@ -1,10 +1,12 @@
 package com.icaroerasmo.runners;
 
 import com.icaroerasmo.model.FaceRecognition;
+import com.icaroerasmo.properties.Camera;
 import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionService;
 import com.icaroerasmo.service.FaceRecognitionService;
+import com.icaroerasmo.service.MqttPublisherService;
 import com.icaroerasmo.service.RtspFrameExtractorService;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.toMap;
-import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
+import static org.bytedeco.opencv.global.opencv_imgcodecs.imencode;
 
 @Log4j2
 @Component
@@ -37,6 +39,7 @@ public class RtspRecognitionRunner {
     private final RtspFrameExtractorService rtspFrameExtractorService;
     private final DetectionService detectionService;
     private final MatUtil matUtil;
+    private final MqttPublisherService mqttPublisherService;
     private final StreamsProperties streamsProperties;
     private final TrainingProperties trainingProperties;
 
@@ -50,17 +53,20 @@ public class RtspRecognitionRunner {
 
             final FaceRecognizer finalFaceRecognizer = faceRecognizer;
 
-            List<String> urls = streamsProperties.getRtspUrls();
-            if (urls == null || urls.isEmpty()) {
-                throw new IllegalStateException("No RTSP URLs configured under face-recognition.streams.rtsp-urls");
+            List<Camera> cameras = streamsProperties.getCameras();
+            if (cameras == null || cameras.isEmpty()) {
+                throw new IllegalStateException("No cameras configured under face-recognition.streams.cameras");
             }
 
-            for (String rtspUrl : urls) {
-                if (rtspUrl == null || rtspUrl.isBlank()) {
+            for (Camera camera : cameras) {
+                if (camera == null || camera.getUrl() == null || camera.getUrl().isBlank()) {
                     continue;
                 }
 
-                log.info("Starting recognition for RTSP stream: {}", rtspUrl);
+                String cameraName = camera.getName() != null ? camera.getName() : "unknown";
+                String rtspUrl = camera.getUrl();
+
+                log.info("Starting recognition for camera '{}': {}", cameraName, rtspUrl);
 
                 rtspFrameExtractorService.extract(rtspUrl, (img) -> {
 
@@ -84,15 +90,15 @@ public class RtspRecognitionRunner {
                             return;
                         }
 
-                        final Map<String, Boolean> shouldAnnounceMap = faces.parallelStream().
-                                map(output -> Map.entry(
+                        final java.util.Map<String, Boolean> shouldAnnounceMap = faces.parallelStream().
+                                map(output -> java.util.Map.entry(
                                         output.getPersonName(),
                                         detectionService.shouldAnnounceDetection(
                                                 output.getPersonName(),
                                                 output.getConfidence()))
                                 ).collect(toMap(
-                                        Map.Entry::getKey,
-                                        Map.Entry::getValue,
+                                        java.util.Map.Entry::getKey,
+                                        java.util.Map.Entry::getValue,
                                         (e1, e2) -> e1,
                                         LinkedHashMap::new
                                 ));
@@ -100,36 +106,44 @@ public class RtspRecognitionRunner {
                         boolean shouldAnnounce = shouldAnnounceMap.values().stream().allMatch(Boolean::booleanValue);
 
                         if (shouldAnnounce) {
-                            String names = faces.stream()
-                                    .map(FaceRecognition.DetectedFaces::getPersonName)
-                                    .collect(Collectors.joining());
-                            log.info("Pessoas detectadas: {}", names);
+                            // Collect detected names with their confidence scores
+                            Map<String, Double> detectedPeopleWithScores = faces.stream()
+                                    .collect(Collectors.toMap(
+                                            FaceRecognition.DetectedFaces::getPersonName,
+                                            FaceRecognition.DetectedFaces::getConfidence,
+                                            (existing, replacement) -> existing // Keep first if duplicate
+                                    ));
 
-                            // Save images ONLY when people are recognized
+                            String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
+                            log.info("Pessoas detectadas em '{}': {}", cameraName, namesStr);
+
+                            // Publish to MQTT in double-take format
                             try {
-                                // Create recognized_faces folder if it doesn't exist
-                                java.io.File recognizedDir = new java.io.File("recognized_faces");
-                                if (!recognizedDir.exists()) {
-                                    recognizedDir.mkdirs();
-                                }
-
                                 Mat finalImg = img.clone();
                                 faces.forEach(output -> {
                                     if (output.getFaceRect() != null && output.getPersonName() != null) {
                                         matUtil.drawRectangleAndName(finalImg, output.getPersonName(), output.getFaceRect());
                                     }
                                 });
-                                String filename = String.format("recognized_faces/img_final_%d.jpg", COUNT.getAndIncrement());
-                                imwrite(filename, finalImg);
-                                log.info("Saved final image with all recognized faces: {}", filename);
+
+                                // Convert Mat to byte array using imencode
+                                org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
+                                org.bytedeco.opencv.global.opencv_imgcodecs.imencode(new org.bytedeco.javacpp.BytePointer(".jpg"), finalImg, buf);
+                                byte[] imageBytes = new byte[(int) buf.limit()];
+                                buf.get(imageBytes);
+                                buf.deallocate();
+
+                                // Publish to MQTT in double-take format using camera name and scores
+                                mqttPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
+
                                 matUtil.releaseResources(finalImg);
                             } catch (Exception e) {
-                                // Silently ignore
+                                log.error("Failed to publish detection to MQTT for camera '{}'", cameraName, e);
                             }
                         }
 
                     } catch (Exception e) {
-                        // Silently ignore
+                        log.error("Error processing frame from camera '{}'", cameraName, e);
                     } finally {
                         try {
                             Mat detectionImg = null;
@@ -137,9 +151,8 @@ public class RtspRecognitionRunner {
                                 detectionImg = faceRecognition.getDetectionImg();
                             }
                             matUtil.releaseResources(img, detectionImg);
-                            faceRecognition = null;
                         } catch (Exception releaseEx) {
-                            // Silently ignore
+                            log.warn("Error releasing resources for camera '{}'", cameraName, releaseEx);
                         }
                     }
                 });

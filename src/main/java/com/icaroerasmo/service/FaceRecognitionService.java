@@ -40,6 +40,7 @@ public class FaceRecognitionService {
     private final TrainingProperties trainingProperties;
     private final TrainingMetadataRepository trainingMetadataRepository;
     private final TrainedDatasetRepository trainedDatasetRepository;
+    private final MqttPublisherService mqttPublisherService;
 
     public static final int MIN_SCORE = 50;
     public static final String UNKNOWN = "Unknown";
@@ -91,21 +92,24 @@ public class FaceRecognitionService {
                 } else {
                     log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
 
+                    // Publish individual face detection to MQTT
                     try {
-                        java.io.File recognizedDir = new java.io.File("recognized_faces");
-                        if (!recognizedDir.exists()) {
-                            recognizedDir.mkdirs();
-                        }
-
                         Mat faceImg = new Mat(testImage, faceRect);
-                        String filename = String.format("recognized_faces/recognized_%s_%d.jpg",
-                            detectedPerson.replaceAll("[^a-zA-Z0-9]", "_"),
-                            System.currentTimeMillis());
-                        imwrite(filename, faceImg);
-                        log.info("Saved recognized face: {}", filename);
+
+                        // Convert Mat to byte array using imencode
+                        org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
+                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(new org.bytedeco.javacpp.BytePointer(".jpg"), faceImg, buf);
+                        byte[] imageBytes = new byte[(int) buf.limit()];
+                        buf.get(imageBytes);
+                        buf.deallocate();
+
+                        // Publish to MQTT
+                        mqttPublisherService.publishPersonDetection(imageBytes, detectedPerson, detectionConfidence);
+                        log.info("Published recognized face to MQTT: {}", detectedPerson);
+
                         matUtil.releaseResources(faceImg);
                     } catch (Exception ex) {
-                        log.warn("Failed to save recognized face image", ex);
+                        log.warn("Failed to publish recognized face to MQTT", ex);
                     }
                 }
 
@@ -253,16 +257,16 @@ public class FaceRecognitionService {
             log.warn("Training data changed: Number of person folders changed from {} to {}",
                 storedHashes.size(), currentHashes.size());
 
-            Set<String> addedPersons = new HashSet<>(currentHashes.keySet());
-            addedPersons.removeAll(storedHashes.keySet());
-            if (!addedPersons.isEmpty()) {
-                log.info("New person folders detected: {}", addedPersons);
+            Set<String> addedPeople = new HashSet<>(currentHashes.keySet());
+            addedPeople.removeAll(storedHashes.keySet());
+            if (!addedPeople.isEmpty()) {
+                log.info("New person folders detected: {}", addedPeople);
             }
 
-            Set<String> removedPersons = new HashSet<>(storedHashes.keySet());
-            removedPersons.removeAll(currentHashes.keySet());
-            if (!removedPersons.isEmpty()) {
-                log.info("Person folders removed: {}", removedPersons);
+            Set<String> removedPeople = new HashSet<>(storedHashes.keySet());
+            removedPeople.removeAll(currentHashes.keySet());
+            if (!removedPeople.isEmpty()) {
+                log.info("Person folders removed: {}", removedPeople);
             }
 
             return true;

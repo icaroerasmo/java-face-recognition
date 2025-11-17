@@ -17,4 +17,7 @@ public class FaceRecognitionProperties {
 
     @NestedConfigurationProperty
     private TrainingProperties training = new TrainingProperties();
+
+    @NestedConfigurationProperty
+    private MqttProperties mqtt = new MqttProperties();
 }

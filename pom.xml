@@ -64,6 +64,17 @@
       <version>1.18.36</version>
       <scope>provided</scope>
     </dependency>
+    <!-- MQTT Client -->
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+      <version>1.2.5</version>
+    </dependency>
+    <!-- JSON processing (already included via spring-boot-starter-web) -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
   </dependencies>
   <build>
     <plugins>
