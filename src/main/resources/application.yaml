@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: "jdbc:sqlite:./face_recognition.db"
+    url: "jdbc:sqlite::memory:"
     driver-class-name: org.sqlite.JDBC
 
   jpa:

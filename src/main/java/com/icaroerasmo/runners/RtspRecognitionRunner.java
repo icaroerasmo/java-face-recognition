@@ -49,13 +49,9 @@ public class RtspRecognitionRunner {
         FaceRecognizer faceRecognizer = null;
 
         try {
-            Path datasetPath = Paths.get(trainingProperties.getDatasetPath());
-            if (datasetPath.toFile().exists()) {
-                faceRecognizer = faceRecognitionService.load();
-            } else {
-                File trainingRootDir = getTrainedFile();
-                faceRecognizer = faceRecognitionService.train(trainingRootDir.toPath());
-            }
+            File trainingRootDir = getTrainedFile();
+            // ensureTrained will compare hashes vs metadata and retrain if needed
+            faceRecognizer = faceRecognitionService.ensureTrained(trainingRootDir.toPath());
 
             final FaceRecognizer finalFaceRecognizer = faceRecognizer; // for lambda capture
 

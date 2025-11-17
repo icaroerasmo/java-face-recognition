@@ -4,11 +4,12 @@ import com.icaroerasmo.model.FaceRecognition;
 import com.icaroerasmo.utils.MatUtil;
 import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.repository.TrainingMetadataRepository;
+import com.icaroerasmo.repository.TrainedDatasetRepository;
 import com.icaroerasmo.repository.entity.TrainingMetadata;
+import com.icaroerasmo.repository.entity.TrainedDataset;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.*;
-import org.jetbrains.annotations.NotNull;
 import org.springframework.stereotype.Service;
 import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
@@ -20,10 +21,11 @@ import java.io.IOException;
 import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.stream.Collectors.toMap;
@@ -39,17 +41,31 @@ public class FaceRecognitionService {
     private final MatUtil matUtil;
     private final TrainingProperties trainingProperties;
     private final TrainingMetadataRepository trainingMetadataRepository;
+    private final TrainedDatasetRepository trainedDatasetRepository;
 
     public static final int MIN_SCORE = 40;
     public static final String UNKNOWN = "Unknown";
 
-    private Path getDatasetPath() {
-        return Paths.get(trainingProperties.getDatasetPath());
-    }
-
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
-        faceRecognizer.read(getDatasetPath().toString());
+        // Load the latest trained dataset XML from DB
+        TrainedDataset trained = trainedDatasetRepository.findAll().stream().findFirst()
+                .orElseThrow(() -> new IllegalStateException("No trained dataset found in database"));
+        Path tmp = null;
+        try {
+            tmp = Files.createTempFile("trained_dataset", ".xml");
+            Files.write(tmp, trained.getModelXml());
+            faceRecognizer.read(tmp.toString());
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to load trained dataset from database", e);
+        } finally {
+            if (tmp != null) {
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignore) {
+                }
+            }
+        }
         return faceRecognizer;
     }
 
@@ -164,7 +180,17 @@ public class FaceRecognitionService {
             faceRecognizer.setLabelInfo(strLabels.indexOf(label), new String(label.getBytes(UTF_8)));
         });
 
-        faceRecognizer.write(getDatasetPath().toString());
+        // Persist the trained model XML into database instead of filesystem
+        java.nio.file.Path tmp = java.nio.file.Files.createTempFile("trained_dataset", ".xml");
+        faceRecognizer.write(tmp.toString());
+        byte[] xmlBytes = java.nio.file.Files.readAllBytes(tmp);
+        java.nio.file.Files.deleteIfExists(tmp);
+
+        trainedDatasetRepository.deleteAll();
+        TrainedDataset trained = new TrainedDataset();
+        trained.setModelXml(xmlBytes);
+        trainedDatasetRepository.save(trained);
+
         matUtil.clearMatVector(images);
 
         // Compute and store training metadata per person folder
@@ -189,6 +215,72 @@ public class FaceRecognitionService {
         });
 
         return faceRecognizer;
+    }
+
+    /**
+     * Checks whether the training data (person folders and images) has changed
+     * compared to what is stored in the training_metadata table.
+     */
+    public boolean isTrainingDataChanged(Path rootFolder) throws IOException {
+        Path rootFolderPath = rootFolder;
+
+        // Compute current hashes per person folder
+        Map<String, String> currentHashes = new HashMap<>();
+        Files.list(rootFolderPath)
+                .filter(path -> path.toFile().isDirectory())
+                .forEach(personFolder -> {
+                    String personName = personFolder.getFileName().toString();
+                    try {
+                        String hash = computeFolderHash(personFolder);
+                        currentHashes.put(personName, hash);
+                    } catch (IOException e) {
+                        log.warn("Failed to compute hash for folder {}", personFolder, e);
+                    }
+                });
+
+        // Load stored hashes from metadata
+        List<TrainingMetadata> allMetadata = trainingMetadataRepository.findAll();
+        Map<String, String> storedHashes = allMetadata.stream()
+                .collect(Collectors.toMap(TrainingMetadata::getPersonName, TrainingMetadata::getFolderHash, (a, b) -> b));
+
+        // If the number of persons differs, training data changed
+        if (currentHashes.size() != storedHashes.size()) {
+            return true;
+        }
+
+        // Compare hash per person
+        for (Map.Entry<String, String> entry : currentHashes.entrySet()) {
+            String personName = entry.getKey();
+            String currentHash = entry.getValue();
+            String storedHash = storedHashes.get(personName);
+            if (storedHash == null || !storedHash.equals(currentHash)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Convenience method that checks for training data changes and retrains
+     * the model (and metadata + DB-stored XML) if needed.
+     */
+    public FaceRecognizer ensureTrained(Path rootFolder) throws IOException {
+        Path rootFolderPath = rootFolder;
+
+        // datasetExists: do we have a trained model stored in the DB?
+        boolean datasetExists = !trainedDatasetRepository.findAll().isEmpty();
+        boolean changed = !datasetExists || isTrainingDataChanged(rootFolderPath);
+
+        if (changed) {
+            log.info("Training data changed or trained dataset missing; retraining and updating DB model");
+            // train(...) will retrain the recognizer, overwrite the trained_dataset row,
+            // and refresh folder hashes in training_metadata
+            return train(rootFolderPath);
+        } else {
+            log.info("Training data unchanged; loading existing model from DB");
+            return load();
+        }
     }
 
     private String computeFolderHash(Path folder) throws IOException {
