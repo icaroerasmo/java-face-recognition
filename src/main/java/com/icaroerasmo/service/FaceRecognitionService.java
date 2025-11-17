@@ -89,8 +89,7 @@ public class FaceRecognitionService {
         return new FaceRecognition(detectedFaces, testImage);
     }
 
-    public FaceRecognizer train(String root) throws IOException {
-        Path rootFolder = Paths.get(root);
+    public FaceRecognizer train(Path rootFolder) throws IOException {
         Map<Path, Object[]> fileList = Files.list(rootFolder).
                 filter(file -> file.toFile().isDirectory()).
                 flatMap(folder -> {
