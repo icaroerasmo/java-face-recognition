@@ -14,4 +14,7 @@ public class FaceRecognitionProperties {
 
     @NestedConfigurationProperty
     private StreamsProperties streams = new StreamsProperties();
+
+    @NestedConfigurationProperty
+    private TrainingProperties training = new TrainingProperties();
 }

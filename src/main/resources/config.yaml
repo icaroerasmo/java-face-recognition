@@ -3,3 +3,6 @@ face-recognition:
     rtsp-urls:
       - "rtsp://localhost:8554/backyard?video&audio"
       # - "rtsp://another-camera/stream"  # example additional camera
+  training:
+    dataset-path: "trained_dataset.xml"
+    root-folder: "training"

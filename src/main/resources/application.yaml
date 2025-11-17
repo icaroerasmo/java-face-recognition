@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: "jdbc:sqlite:./face_recognition.db"
+    driver-class-name: org.sqlite.JDBC
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        # Explicitly set Hibernate dialect to the official SQLiteDialect
+        dialect: org.hibernate.community.dialect.SQLiteDialect
+
+  config:
+    # Allow pointing to an external config folder via environment or system property
+    # Example: -Dspring.config.additional-location=./config/
+    # We keep user-editable configs (face-recognition.*) in config.yaml there
+    import: optional:config/ # will look for config/config.yaml by default
+
+logging:
+  level:
+    root: INFO
+    com.icaroerasmo: DEBUG

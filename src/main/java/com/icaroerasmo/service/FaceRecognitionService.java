@@ -2,6 +2,9 @@ package com.icaroerasmo.service;
 
 import com.icaroerasmo.model.FaceRecognition;
 import com.icaroerasmo.utils.MatUtil;
+import com.icaroerasmo.properties.TrainingProperties;
+import com.icaroerasmo.repository.TrainingMetadataRepository;
+import com.icaroerasmo.repository.entity.TrainingMetadata;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.*;
@@ -32,16 +35,21 @@ import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
 @RequiredArgsConstructor
 public class FaceRecognitionService {
 
-    private static final Path DATASET = Paths.get("trained_dataset.xml");
+    private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
+    private final MatUtil matUtil;
+    private final TrainingProperties trainingProperties;
+    private final TrainingMetadataRepository trainingMetadataRepository;
+
     public static final int MIN_SCORE = 40;
     public static final String UNKNOWN = "Unknown";
 
-    private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
-    private final MatUtil matUtil;
+    private Path getDatasetPath() {
+        return Paths.get(trainingProperties.getDatasetPath());
+    }
 
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
-        faceRecognizer.read(DATASET.toString());
+        faceRecognizer.read(getDatasetPath().toString());
         return faceRecognizer;
     }
 
@@ -90,24 +98,25 @@ public class FaceRecognitionService {
     }
 
     public FaceRecognizer train(Path rootFolder) throws IOException {
-        Map<Path, Object[]> fileList = Files.list(rootFolder).
-                filter(file -> file.toFile().isDirectory()).
-                flatMap(folder -> {
+        Path rootFolderPath = rootFolder;
+        Map<Path, Object[]> fileList = Files.list(rootFolderPath)
+                .filter(file -> file.toFile().isDirectory())
+                .flatMap(folder -> {
                     try {
-                        var personName = folder.getName(folder.getNameCount()-1).toString();
+                        var personName = folder.getName(folder.getNameCount() - 1).toString();
                         return Files.list(folder).map(file -> Map.entry(file, personName));
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
-                }).
-                map(entry -> {
+                })
+                .map(entry -> {
                     File image = entry.getKey().toFile();
 
-                    Mat img = imread(image.getAbsolutePath()/*, IMREAD_GRAYSCALE*/);
+                    Mat img = imread(image.getAbsolutePath() /*, IMREAD_GRAYSCALE*/);
 
                     List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
 
-                    if(facesList.isEmpty()) {
+                    if (facesList.isEmpty()) {
                         return null;
                     }
 
@@ -117,9 +126,9 @@ public class FaceRecognitionService {
                     matUtil.releaseResources(img);
 
                     return Map.entry(entry.getKey(), new Object[]{face, entry.getValue()});
-                }).
-                filter(entry -> entry != null).
-                collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
+                })
+                .filter(entry -> entry != null)
+                .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         MatVector images = new MatVector(fileList.size());
 
@@ -155,10 +164,58 @@ public class FaceRecognitionService {
             faceRecognizer.setLabelInfo(strLabels.indexOf(label), new String(label.getBytes(UTF_8)));
         });
 
-        faceRecognizer.write(DATASET.toString());
-
+        faceRecognizer.write(getDatasetPath().toString());
         matUtil.clearMatVector(images);
 
+        // Compute and store training metadata per person folder
+        Map<String, String> personHashes = new java.util.HashMap<>();
+        Files.list(rootFolderPath)
+                .filter(path -> path.toFile().isDirectory())
+                .forEach(personFolder -> {
+                    String personName = personFolder.getFileName().toString();
+                    try {
+                        String hash = computeFolderHash(personFolder);
+                        personHashes.put(personName, hash);
+                    } catch (IOException e) {
+                        log.warn("Failed to compute hash for folder {}", personFolder, e);
+                    }
+                });
+
+        personHashes.forEach((personName, hash) -> {
+            TrainingMetadata metadata = new TrainingMetadata();
+            metadata.setPersonName(personName);
+            metadata.setFolderHash(hash);
+            trainingMetadataRepository.save(metadata);
+        });
+
         return faceRecognizer;
+    }
+
+    private String computeFolderHash(Path folder) throws IOException {
+        java.security.MessageDigest digest;
+        try {
+            digest = java.security.MessageDigest.getInstance("SHA-256");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+
+        Files.walk(folder)
+                .filter(Files::isRegularFile)
+                .sorted()
+                .forEach(path -> {
+                    try {
+                        digest.update(path.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        digest.update(java.nio.file.Files.readAllBytes(path));
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+        byte[] hashBytes = digest.digest();
+        StringBuilder sb = new StringBuilder();
+        for (byte b : hashBytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 }

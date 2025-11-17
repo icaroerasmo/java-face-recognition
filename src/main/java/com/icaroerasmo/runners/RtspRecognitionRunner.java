@@ -2,6 +2,7 @@ package com.icaroerasmo.runners;
 
 import com.icaroerasmo.model.FaceRecognition;
 import com.icaroerasmo.properties.StreamsProperties;
+import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionService;
 import com.icaroerasmo.service.FaceRecognitionService;
 import com.icaroerasmo.service.RtspFrameExtractorService;
@@ -10,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
@@ -33,8 +35,6 @@ import org.bytedeco.opencv.opencv_core.Size;
 @RequiredArgsConstructor
 public class RtspRecognitionRunner {
 
-    private static final Path DATASET = Paths.get("trained_dataset.xml");
-    private static final String TRAINING_ROOT_CLASSPATH = "training"; // folder inside classpath with training dataset
     private static final AtomicInteger COUNT = new AtomicInteger(0);
 
     private final FaceRecognitionService faceRecognitionService;
@@ -42,31 +42,18 @@ public class RtspRecognitionRunner {
     private final DetectionService detectionService;
     private final MatUtil matUtil;
     private final StreamsProperties streamsProperties;
+    private final TrainingProperties trainingProperties;
 
     public void start(String... args) throws Exception {
 
         FaceRecognizer faceRecognizer = null;
 
         try {
-            if (DATASET.toFile().exists()) {
+            Path datasetPath = Paths.get(trainingProperties.getDatasetPath());
+            if (datasetPath.toFile().exists()) {
                 faceRecognizer = faceRecognitionService.load();
             } else {
-                // Dataset does not exist: use a fixed training folder from the classpath
-                ClassPathResource trainingResource = new ClassPathResource(TRAINING_ROOT_CLASSPATH);
-                if (!trainingResource.exists()) {
-                    throw new IllegalStateException("Training root folder '" + TRAINING_ROOT_CLASSPATH + "' not found on classpath. " +
-                            "Place your training dataset under src/main/resources/" + TRAINING_ROOT_CLASSPATH + "/");
-                }
-
-                File trainingRootDir;
-                try {
-                    trainingRootDir = trainingResource.getFile();
-                } catch (IOException ex) {
-                    throw new IllegalStateException("Unable to resolve training root folder from classpath resource '" +
-                            TRAINING_ROOT_CLASSPATH + "'", ex);
-                }
-
-                // FaceRecognitionService.train(Path root) expects a Path
+                File trainingRootDir = getTrainedFile();
                 faceRecognizer = faceRecognitionService.train(trainingRootDir.toPath());
             }
 
@@ -189,8 +176,26 @@ public class RtspRecognitionRunner {
                 try {
                     faceRecognizer.close();
                 } catch (Exception ignore) {}
-                faceRecognizer = null;
             }
         }
+    }
+
+    @NotNull
+    private File getTrainedFile() {
+        String trainingRootFolder = trainingProperties.getRootFolder();
+        ClassPathResource trainingResource = new ClassPathResource(trainingRootFolder);
+        if (!trainingResource.exists()) {
+            throw new IllegalStateException("Training root folder '" + trainingRootFolder + "' not found on classpath. " +
+                    "Place your training dataset under src/main/resources/" + trainingRootFolder + "/");
+        }
+
+        File trainingRootDir;
+        try {
+            trainingRootDir = trainingResource.getFile();
+        } catch (IOException ex) {
+            throw new IllegalStateException("Unable to resolve training root folder from classpath resource '" +
+                    trainingRootFolder + "'", ex);
+        }
+        return trainingRootDir;
     }
 }
