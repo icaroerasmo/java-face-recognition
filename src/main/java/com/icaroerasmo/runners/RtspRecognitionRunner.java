@@ -107,13 +107,21 @@ public class RtspRecognitionRunner {
 
                             // Save images ONLY when people are recognized
                             try {
+                                // Create recognized_faces folder if it doesn't exist
+                                java.io.File recognizedDir = new java.io.File("recognized_faces");
+                                if (!recognizedDir.exists()) {
+                                    recognizedDir.mkdirs();
+                                }
+
                                 Mat finalImg = img.clone();
                                 faces.forEach(output -> {
                                     if (output.getFaceRect() != null && output.getPersonName() != null) {
                                         matUtil.drawRectangleAndName(finalImg, output.getPersonName(), output.getFaceRect());
                                     }
                                 });
-                                imwrite("img_%s_%d_.jpg".formatted("final", COUNT.getAndIncrement()), finalImg);
+                                String filename = String.format("recognized_faces/img_final_%d.jpg", COUNT.getAndIncrement());
+                                imwrite(filename, finalImg);
+                                log.info("Saved final image with all recognized faces: {}", filename);
                                 matUtil.releaseResources(finalImg);
                             } catch (Exception e) {
                                 // Silently ignore

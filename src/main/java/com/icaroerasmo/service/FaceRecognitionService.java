@@ -21,9 +21,7 @@ import java.io.IOException;
 import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -48,7 +46,6 @@ public class FaceRecognitionService {
 
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
-        // Load the latest trained dataset XML from DB
         TrainedDataset trained = trainedDatasetRepository.findAll().stream().findFirst()
                 .orElseThrow(() -> new IllegalStateException("No trained dataset found in database"));
         Path tmp = null;
@@ -84,21 +81,24 @@ public class FaceRecognitionService {
                 faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
 
                 String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
-                String detectedPerson = label.substring(0, label.length() - 1); // Remove the last character which is a space
+                String detectedPerson = label.substring(0, label.length() - 1);
                 double detectionConfidence = confidencePtr.get(0);
 
                 if (detectionConfidence > MIN_SCORE) {
-                    log.debug("Detected person is {} with confidence {}" +
-                                    " but score is bigger than {} so result is {}.",
+                    log.debug("Detected person is {} with confidence {} but score is bigger than {} so result is {}.",
                             detectedPerson, detectionConfidence, MIN_SCORE, UNKNOWN);
                     detectedPerson = UNKNOWN;
                 } else {
                     log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
 
-                    // Save image with person's name when recognized
                     try {
+                        java.io.File recognizedDir = new java.io.File("recognized_faces");
+                        if (!recognizedDir.exists()) {
+                            recognizedDir.mkdirs();
+                        }
+
                         Mat faceImg = new Mat(testImage, faceRect);
-                        String filename = String.format("recognized_%s_%d.jpg",
+                        String filename = String.format("recognized_faces/recognized_%s_%d.jpg",
                             detectedPerson.replaceAll("[^a-zA-Z0-9]", "_"),
                             System.currentTimeMillis());
                         imwrite(filename, faceImg);
@@ -138,7 +138,6 @@ public class FaceRecognitionService {
 
                     Mat img = imread(image.getAbsolutePath());
 
-                    // Pass false to avoid saving debug frames during training
                     List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
 
                     if (facesList.isEmpty()) {
@@ -179,8 +178,6 @@ public class FaceRecognitionService {
             counter.getAndIncrement();
         });
 
-//        FaceRecognizer faceRecognizer = FisherFaceRecognizer.create();
-//         FaceRecognizer faceRecognizer = EigenFaceRecognizer.create();
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
 
         faceRecognizer.train(images, labels);
@@ -189,7 +186,6 @@ public class FaceRecognitionService {
             faceRecognizer.setLabelInfo(strLabels.indexOf(label), new String(label.getBytes(UTF_8)));
         });
 
-        // Persist the trained model XML into database instead of filesystem
         java.nio.file.Path tmp = java.nio.file.Files.createTempFile("trained_dataset", ".xml");
         faceRecognizer.write(tmp.toString());
         byte[] xmlBytes = java.nio.file.Files.readAllBytes(tmp);
@@ -202,7 +198,6 @@ public class FaceRecognitionService {
 
         matUtil.clearMatVector(images);
 
-        // Compute and store training metadata per person folder
         Map<String, String> personHashes = new java.util.HashMap<>();
         Files.list(rootFolderPath)
                 .filter(path -> path.toFile().isDirectory())
@@ -216,6 +211,7 @@ public class FaceRecognitionService {
                     }
                 });
 
+        trainingMetadataRepository.deleteAll();
         personHashes.forEach((personName, hash) -> {
             TrainingMetadata metadata = new TrainingMetadata();
             metadata.setPersonName(personName);
@@ -226,14 +222,11 @@ public class FaceRecognitionService {
         return faceRecognizer;
     }
 
-    /**
-     * Checks whether the training data (person folders and images) has changed
-     * compared to what is stored in the training_metadata table.
-     */
     public boolean isTrainingDataChanged(Path rootFolder) throws IOException {
         Path rootFolderPath = rootFolder;
 
-        // Compute current hashes per person folder
+        log.info("Checking for training data changes in: {}", rootFolderPath);
+
         Map<String, String> currentHashes = new HashMap<>();
         Files.list(rootFolderPath)
                 .filter(path -> path.toFile().isDirectory())
@@ -242,57 +235,88 @@ public class FaceRecognitionService {
                     try {
                         String hash = computeFolderHash(personFolder);
                         currentHashes.put(personName, hash);
+                        log.debug("Computed hash for {}: {}", personName, hash.substring(0, 8) + "...");
                     } catch (IOException e) {
                         log.warn("Failed to compute hash for folder {}", personFolder, e);
                     }
                 });
 
-        // Load stored hashes from metadata
+        log.info("Found {} person folders in training directory", currentHashes.size());
+
         List<TrainingMetadata> allMetadata = trainingMetadataRepository.findAll();
         Map<String, String> storedHashes = allMetadata.stream()
                 .collect(Collectors.toMap(TrainingMetadata::getPersonName, TrainingMetadata::getFolderHash, (a, b) -> b));
 
-        // If the number of persons differs, training data changed
+        log.info("Found {} stored person metadata records in database", storedHashes.size());
+
         if (currentHashes.size() != storedHashes.size()) {
+            log.warn("Training data changed: Number of person folders changed from {} to {}",
+                storedHashes.size(), currentHashes.size());
+
+            Set<String> addedPersons = new HashSet<>(currentHashes.keySet());
+            addedPersons.removeAll(storedHashes.keySet());
+            if (!addedPersons.isEmpty()) {
+                log.info("New person folders detected: {}", addedPersons);
+            }
+
+            Set<String> removedPersons = new HashSet<>(storedHashes.keySet());
+            removedPersons.removeAll(currentHashes.keySet());
+            if (!removedPersons.isEmpty()) {
+                log.info("Person folders removed: {}", removedPersons);
+            }
+
             return true;
         }
 
-        // Compare hash per person
         for (Map.Entry<String, String> entry : currentHashes.entrySet()) {
             String personName = entry.getKey();
             String currentHash = entry.getValue();
             String storedHash = storedHashes.get(personName);
             if (storedHash == null || !storedHash.equals(currentHash)) {
+                log.warn("Training data changed: Images changed for person '{}'", personName);
+                log.debug("  Current hash: {}", currentHash.substring(0, 16) + "...");
+                log.debug("  Stored hash:  {}", storedHash != null ? storedHash.substring(0, 16) + "..." : "null");
                 return true;
             }
         }
 
+        log.info("No changes detected in training data");
         return false;
     }
 
-    /**
-     * Convenience method that checks for training data changes and retrains
-     * the model (and metadata + DB-stored XML) if needed.
-     */
     public FaceRecognizer ensureTrained(Path rootFolder) throws IOException {
         Path rootFolderPath = rootFolder;
 
-        // datasetExists: do we have a trained model stored in the DB?
+        log.info("=== Starting face recognition model check ===");
+        log.info("Training folder: {}", rootFolderPath.toAbsolutePath());
+
         boolean datasetExists = !trainedDatasetRepository.findAll().isEmpty();
+        log.info("Trained model exists in database: {}", datasetExists);
+
+        if (!datasetExists) {
+            log.warn("No trained model found in database - initial training required");
+        }
+
         boolean changed = !datasetExists || isTrainingDataChanged(rootFolderPath);
 
         if (changed) {
-            log.info("Training data changed or trained dataset missing; retraining and updating DB model");
-            // train(...) will retrain the recognizer, overwrite the trained_dataset row,
-            // and refresh folder hashes in training_metadata
-            return train(rootFolderPath);
+            log.warn("=== RETRAINING TRIGGERED ===");
+            log.info("Reason: {}", !datasetExists ? "No existing model" : "Training data changed");
+            log.info("Starting model training process...");
+            FaceRecognizer recognizer = train(rootFolderPath);
+            log.info("=== TRAINING COMPLETED SUCCESSFULLY ===");
+            return recognizer;
         } else {
             log.info("Training data unchanged; loading existing model from DB");
-            return load();
+            FaceRecognizer recognizer = load();
+            log.info("=== MODEL LOADED FROM DATABASE ===");
+            return recognizer;
         }
     }
 
     private String computeFolderHash(Path folder) throws IOException {
+        log.debug("Computing hash for folder: {}", folder.getFileName());
+
         java.security.MessageDigest digest;
         try {
             digest = java.security.MessageDigest.getInstance("SHA-256");
@@ -300,17 +324,22 @@ public class FaceRecognitionService {
             throw new IllegalStateException("SHA-256 not available", e);
         }
 
+        long[] fileCount = {0};
         Files.walk(folder)
                 .filter(Files::isRegularFile)
                 .sorted()
                 .forEach(path -> {
                     try {
+                        fileCount[0]++;
                         digest.update(path.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                         digest.update(java.nio.file.Files.readAllBytes(path));
+                        log.trace("  Processed file: {}", path.getFileName());
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
                 });
+
+        log.debug("  Total files processed for {}: {}", folder.getFileName(), fileCount[0]);
 
         byte[] hashBytes = digest.digest();
         StringBuilder sb = new StringBuilder();
@@ -320,3 +349,4 @@ public class FaceRecognitionService {
         return sb.toString();
     }
 }
+

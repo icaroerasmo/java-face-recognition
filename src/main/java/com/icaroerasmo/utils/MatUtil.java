@@ -23,15 +23,28 @@ public class MatUtil {
     }
 
     public void drawRectangleAndName(Mat img, String text, Rect rect) {
-        int textX = rect.x(); // or adjust for centering
-        int textY = rect.y()+rect.height()+25; // offset to create space below rectangle.
+        // Calculate proportional values based on image resolution
+        int imageWidth = img.cols();
+        int imageHeight = img.rows();
+        double scaleFactor = Math.sqrt(imageWidth * imageHeight) / 1000.0; // Base on 1000x1000 reference
+
+        // Line thickness proportional to image size (minimum 1, scales with resolution)
+        int thickness = Math.max(1, (int) Math.round(2 * scaleFactor));
+
+        // Font scale proportional to image size
+        double fontScale = Math.max(0.4, 0.8 * scaleFactor);
+
+        // Text offset proportional to image size
+        int textOffset = Math.max(15, (int) Math.round(25 * scaleFactor));
+
+        int textX = rect.x();
+        int textY = rect.y() + rect.height() + textOffset;
         int fontFace = FONT_HERSHEY_SIMPLEX;
-        double fontScale = 1.0;
         Scalar color = new Scalar(76, 175, 80, 1);
-        int thicknessText = 2;
         int lineType = LINE_8;
-        rectangle(img, rect, color, thicknessText, lineType, 0);
-        putText(img, text, new Point(textX, textY), fontFace, fontScale, color, thicknessText, lineType, false);
+
+        rectangle(img, rect, color, thickness, lineType, 0);
+        putText(img, text, new Point(textX, textY), fontFace, fontScale, color, thickness, lineType, false);
     }
 
     public void clearMatVector(MatVector images) {
