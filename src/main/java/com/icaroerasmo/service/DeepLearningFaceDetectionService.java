@@ -9,8 +9,13 @@ import org.bytedeco.opencv.opencv_core.*;
 import org.bytedeco.opencv.opencv_dnn.*;
 import org.springframework.stereotype.Service;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -53,11 +58,55 @@ public class DeepLearningFaceDetectionService {
 
     static {
         try {
-            net = readNetFromCaffe(Path.of(ClassLoader.getSystemResource(PROTO_FILE).toURI()).toString(),
-                    Path.of(ClassLoader.getSystemResource(CAFFE_MODEL_FILE).toURI()).toString());
-        } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
+            String protoPath = getResourcePath(PROTO_FILE);
+            String caffeModelPath = getResourcePath(CAFFE_MODEL_FILE);
+
+            log.info("Loading face detection model from: {} and {}", protoPath, caffeModelPath);
+            net = readNetFromCaffe(protoPath, caffeModelPath);
+            log.info("Face detection model loaded successfully");
+        } catch (Exception e) {
+            log.error("Failed to load face detection model", e);
+            throw new RuntimeException("Failed to initialize face detection model", e);
         }
+    }
+
+    /**
+     * Get resource path from classpath or filesystem.
+     * First tries to load from /app/opencv/ (for Docker),
+     * then from classpath resources (for development).
+     */
+    private static String getResourcePath(String resourceName) throws IOException, URISyntaxException {
+        // Extract just the filename from the path
+        String fileName = resourceName.contains("/") ?
+            resourceName.substring(resourceName.lastIndexOf('/') + 1) : resourceName;
+
+        // Try Docker deployment path first
+        File dockerFile = new File("/app/opencv/" + fileName);
+        if (dockerFile.exists()) {
+            log.debug("Loading {} from Docker filesystem: {}", resourceName, dockerFile.getAbsolutePath());
+            return dockerFile.getAbsolutePath();
+        }
+
+        // Try loading from classpath (development/testing)
+        var resource = ClassLoader.getSystemResource(resourceName);
+        if (resource != null) {
+            log.debug("Loading {} from classpath", resourceName);
+            return Path.of(resource.toURI()).toString();
+        }
+
+        // Try extracting from JAR to temp directory
+        try (InputStream is = DeepLearningFaceDetectionService.class.getClassLoader().getResourceAsStream(resourceName)) {
+            if (is != null) {
+                Path tempFile = Files.createTempFile("opencv_", "_" + fileName);
+                Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
+                tempFile.toFile().deleteOnExit();
+                log.debug("Extracted {} from JAR to temp file: {}", resourceName, tempFile);
+                return tempFile.toString();
+            }
+        }
+
+        throw new IOException("Resource not found: " + resourceName +
+            ". Checked: /app/opencv/" + fileName + ", classpath:" + resourceName);
     }
 
     public List<Rect> detect(Mat testImage) {//detect faces and draw a blue rectangle arroung each face

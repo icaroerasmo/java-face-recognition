@@ -170,20 +170,42 @@ public class RtspRecognitionRunner {
     @NotNull
     private File getTrainedFile() {
         String trainingRootFolder = trainingProperties.getRootFolder();
-        ClassPathResource trainingResource = new ClassPathResource(trainingRootFolder);
-        if (!trainingResource.exists()) {
-            throw new IllegalStateException("Training root folder '" + trainingRootFolder + "' not found on classpath. " +
-                    "Place your training dataset under src/main/resources/" + trainingRootFolder + "/");
+
+        // Try 1: Check if it's an absolute path or relative path on filesystem
+        File filesystemFolder = new File(trainingRootFolder);
+        if (filesystemFolder.exists() && filesystemFolder.isDirectory()) {
+            log.debug("Found training folder on filesystem: {}", filesystemFolder.getAbsolutePath());
+            return filesystemFolder;
         }
 
-        File trainingRootDir;
-        try {
-            trainingRootDir = trainingResource.getFile();
-        } catch (IOException ex) {
-            throw new IllegalStateException("Unable to resolve training root folder from classpath resource '" +
-                    trainingRootFolder + "'", ex);
+        // Try 2: Check in /app/train (Docker runtime path)
+        File dockerFolder = new File("/app/train");
+        if (dockerFolder.exists() && dockerFolder.isDirectory()) {
+            log.debug("Found training folder in Docker path: {}", dockerFolder.getAbsolutePath());
+            return dockerFolder;
         }
-        return trainingRootDir;
+
+        // Try 3: Check classpath (development/JAR with embedded resources)
+        ClassPathResource trainingResource = new ClassPathResource(trainingRootFolder);
+        if (trainingResource.exists()) {
+            try {
+                File trainingRootDir = trainingResource.getFile();
+                log.debug("Found training folder on classpath: {}", trainingRootDir.getAbsolutePath());
+                return trainingRootDir;
+            } catch (IOException ex) {
+                log.warn("Unable to extract training folder from JAR classpath, will try to use JAR resources", ex);
+                // If JAR extraction fails, we'll create a fallback or error
+                throw new IllegalStateException("Training root folder '" + trainingRootFolder + "' found in JAR but cannot be extracted. " +
+                        "For Docker, mount training data at /app/train or set TRAINING_ROOT_FOLDER environment variable.", ex);
+            }
+        }
+
+        // No training folder found anywhere
+        throw new IllegalStateException(
+                "Training root folder '" + trainingRootFolder + "' not found in any of the following locations:\n" +
+                "1. Filesystem path: " + filesystemFolder.getAbsolutePath() + "\n" +
+                "2. Docker path: /app/train\n" +
+                "3. Classpath resource: " + trainingRootFolder + "\n" +
+                "Please ensure your training dataset is available in one of these locations.");
     }
 }
-
