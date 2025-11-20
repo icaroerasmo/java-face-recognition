@@ -6,7 +6,7 @@ import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionService;
 import com.icaroerasmo.service.FaceRecognitionService;
-import com.icaroerasmo.service.MqttPublisherService;
+import com.icaroerasmo.service.TelegramPublisherService;
 import com.icaroerasmo.service.RtspFrameExtractorService;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
@@ -36,7 +36,7 @@ public class RtspRecognitionRunner {
     private final RtspFrameExtractorService rtspFrameExtractorService;
     private final DetectionService detectionService;
     private final MatUtil matUtil;
-    private final MqttPublisherService mqttPublisherService;
+    private final TelegramPublisherService telegramPublisherService;
     private final StreamsProperties streamsProperties;
     private final TrainingProperties trainingProperties;
 
@@ -127,8 +127,8 @@ public class RtspRecognitionRunner {
                                 buf.get(imageBytes);
                                 buf.deallocate();
 
-                                // Publish to MQTT in double-take format using camera name and scores
-                                mqttPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
+                                // Publish to Telegram with detected people information
+                                telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
 
                                 matUtil.releaseResources(finalImg);
                             } catch (Exception e) {

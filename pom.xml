@@ -63,11 +63,11 @@
       <artifactId>lombok</artifactId>
       <scope>provided</scope>
     </dependency>
-    <!-- MQTT Client -->
+    <!-- Telegram Bot API -->
     <dependency>
-      <groupId>org.eclipse.paho</groupId>
-      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
-      <version>1.2.5</version>
+      <groupId>com.github.pengrad</groupId>
+      <artifactId>java-telegram-bot-api</artifactId>
+      <version>7.9.1</version>
     </dependency>
     <!-- JSON processing (already included via spring-boot-starter-web) -->
     <dependency>
