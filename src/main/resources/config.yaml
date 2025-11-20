@@ -7,14 +7,9 @@ face-recognition:
       #   url: "rtsp://another-camera/stream"
   training:
     dataset-path: "trained_dataset.xml"
-    root-folder: "training"
-  mqtt:
-    enabled: true
-    broker: "tcp://localhost:1883"
-    client-id: "face-recognition-service"
-    username: ""
-    password: ""
-    topic-prefix: "double-take"
-    qos: 0
-    connection-timeout: 10
-    keep-alive-interval: 60
+    root-folder: "train"
+  telegram:
+    # Bot token from Telegram BotFather - set this in config/config.yaml or environment variable
+    bot-token: "${TELEGRAM_BOT_TOKEN:}"
+    # Telegram chat ID to receive notifications - set this in config/config.yaml or environment variable
+    chat-id: "${TELEGRAM_CHAT_ID:}"
