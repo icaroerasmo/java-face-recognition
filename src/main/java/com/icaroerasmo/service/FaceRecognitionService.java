@@ -40,7 +40,6 @@ public class FaceRecognitionService {
     private final TrainingProperties trainingProperties;
     private final TrainingMetadataRepository trainingMetadataRepository;
     private final TrainedDatasetRepository trainedDatasetRepository;
-    private final MqttPublisherService mqttPublisherService;
 
     public static final int MIN_SCORE = 50;
     public static final String UNKNOWN = "Unknown";
@@ -91,26 +90,6 @@ public class FaceRecognitionService {
                     detectedPerson = UNKNOWN;
                 } else {
                     log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
-
-                    // Publish individual face detection to MQTT
-                    try {
-                        Mat faceImg = new Mat(testImage, faceRect);
-
-                        // Convert Mat to byte array using imencode
-                        org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
-                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(new org.bytedeco.javacpp.BytePointer(".jpg"), faceImg, buf);
-                        byte[] imageBytes = new byte[(int) buf.limit()];
-                        buf.get(imageBytes);
-                        buf.deallocate();
-
-                        // Publish to MQTT
-                        mqttPublisherService.publishPersonDetection(imageBytes, detectedPerson, detectionConfidence);
-                        log.info("Published recognized face to MQTT: {}", detectedPerson);
-
-                        matUtil.releaseResources(faceImg);
-                    } catch (Exception ex) {
-                        log.warn("Failed to publish recognized face to MQTT", ex);
-                    }
                 }
 
                 return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
@@ -353,4 +332,3 @@ public class FaceRecognitionService {
         return sb.toString();
     }
 }
-

@@ -19,14 +19,11 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-import static java.util.stream.Collectors.toMap;
-import static org.bytedeco.opencv.global.opencv_imgcodecs.imencode;
 
 @Log4j2
 @Component
@@ -90,30 +87,27 @@ public class RtspRecognitionRunner {
                             return;
                         }
 
-                        final java.util.Map<String, Boolean> shouldAnnounceMap = faces.parallelStream().
-                                map(output -> java.util.Map.entry(
-                                        output.getPersonName(),
-                                        detectionService.shouldAnnounceDetection(
-                                                output.getPersonName(),
-                                                output.getConfidence()))
-                                ).collect(toMap(
-                                        java.util.Map.Entry::getKey,
-                                        java.util.Map.Entry::getValue,
-                                        (e1, e2) -> e1,
-                                        LinkedHashMap::new
+                        // Collect detected names with their confidence scores
+                        Map<String, Double> detectedPeopleWithScores = faces.stream()
+                                .collect(Collectors.toMap(
+                                        FaceRecognition.DetectedFaces::getPersonName,
+                                        FaceRecognition.DetectedFaces::getConfidence,
+                                        (existing, replacement) -> existing // Keep first if duplicate
                                 ));
 
-                        boolean shouldAnnounce = shouldAnnounceMap.values().stream().allMatch(Boolean::booleanValue);
+                        // Check if we have recognized persons (non-Unknown)
+                        boolean hasRecognizedPersons = detectedPeopleWithScores.keySet().stream()
+                                .anyMatch(name -> !"Unknown".equalsIgnoreCase(name));
 
-                        if (shouldAnnounce) {
-                            // Collect detected names with their confidence scores
-                            Map<String, Double> detectedPeopleWithScores = faces.stream()
-                                    .collect(Collectors.toMap(
-                                            FaceRecognition.DetectedFaces::getPersonName,
-                                            FaceRecognition.DetectedFaces::getConfidence,
-                                            (existing, replacement) -> existing // Keep first if duplicate
-                                    ));
+                        // Check if we should announce Unknown detections
+                        boolean shouldAnnounceUnknown = faces.stream()
+                                .filter(face -> "Unknown".equalsIgnoreCase(face.getPersonName()))
+                                .anyMatch(face -> detectionService.shouldAnnounceDetection(
+                                        face.getPersonName(),
+                                        face.getConfidence()));
 
+                        // Publish if we have recognized persons OR if unknown should be announced
+                        if (hasRecognizedPersons || shouldAnnounceUnknown) {
                             String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
                             log.info("Pessoas detectadas em '{}': {}", cameraName, namesStr);
 

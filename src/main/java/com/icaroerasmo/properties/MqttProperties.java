@@ -1,6 +1,8 @@
 package com.icaroerasmo.properties;
 
+import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Getter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
@@ -8,15 +10,27 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "face-recognition.mqtt")
 public class MqttProperties {
+    // localhost
+    private String host = "localhost";
+    // 1883
+    private String port = "1883";
+    // TCP or WEBSOCKETS
+    private ProtocolEnum protocol = ProtocolEnum.TCP;
+    // mqtt_user
+    private String username = "mqtt_user";
+    // password
+    private String password = "password";
+    // true
+    private Boolean automaticReconnect = true;
+    //true
+    private Boolean cleanSession = true;
+    // 10
+    private Integer connectionTimeout = 10;
 
-    private boolean enabled = true;
-    private String broker = "tcp://localhost:1883";
-    private String clientId = "face-recognition-service";
-    private String username = "";
-    private String password = "";
-    private String topicPrefix = "double-take";
-    private int qos = 0;
-    private int connectionTimeout = 10;
-    private int keepAliveInterval = 60;
+    @Getter
+    @AllArgsConstructor
+    public enum ProtocolEnum {
+        TCP("tcp"), WEBSOCKETS("ws");
+        private String protocolShort;
+    }
 }
-

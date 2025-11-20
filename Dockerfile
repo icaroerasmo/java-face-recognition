@@ -55,4 +55,4 @@ RUN cp -r /app/target/classes/opencv/* /app/opencv/ 2>/dev/null || echo "OpenCV 
 
 RUN ls -la /app && ls -la /app/train 2>/dev/null || echo "train directory may be empty" && ls -la /app/opencv 2>/dev/null || echo "opencv directory may be empty"
 
-ENTRYPOINT [ "java", "-Dspring.config.additional-location=optional:/app/config/config.yaml", "-jar", "/app/rtsp-face-recognition.jar" ]
+ENTRYPOINT [ "java", "-Dspring.config.additional-location=/app/config/config.yaml", "-jar", "/app/rtsp-face-recognition.jar" ]
