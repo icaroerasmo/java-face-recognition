@@ -68,7 +68,7 @@ public class TelegramPublisherService {
         for (Map.Entry<String, Double> entry : detectedPeopleWithScores.entrySet()) {
             String personName = entry.getKey();
             double confidence = entry.getValue();
-            double calculatedConfidence = Math.abs(1.0 - confidence);
+            double calculatedConfidence = Math.abs(100 - confidence);
 
             final String fomattedPercentage = String.format("%.2f", calculatedConfidence);
 

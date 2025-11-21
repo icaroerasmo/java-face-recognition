@@ -66,38 +66,77 @@ public class FaceRecognitionService {
         return faceRecognizer;
     }
 
+    /**
+     * Test face recognition on an image.
+     * The FaceRecognizer.predict() operation is synchronized per recognizer instance
+     * to prevent race conditions when multiple cameras are processing frames simultaneously.
+     */
     public FaceRecognition test(FaceRecognizer faceRecognizer, Mat testImage) {
+
+        // Validate input
+        if (testImage == null || testImage.empty()) {
+            log.warn("Cannot perform face recognition on null or empty image");
+            return new FaceRecognition(List.of(), testImage);
+        }
 
         List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
 
+            Mat extractedFace = null;
             Mat img = null;
 
             try {
-                img = matUtil.convertToGray(new Mat(testImage, faceRect));
+                // Extract the face region
+                extractedFace = new Mat(testImage, faceRect);
+
+                // Validate that the extracted face is not empty
+                if (extractedFace.empty()) {
+                    log.warn("Extracted face Mat is empty for rect: x={}, y={}, width={}, height={}",
+                            faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
+                    return null;
+                }
+
+                // Validate dimensions
+                if (extractedFace.rows() <= 0 || extractedFace.cols() <= 0) {
+                    log.warn("Extracted face has invalid dimensions: rows={}, cols={}",
+                            extractedFace.rows(), extractedFace.cols());
+                    return null;
+                }
+
+                img = matUtil.convertToGray(extractedFace);
+
+                if (img.empty()) {
+                    log.warn("Converted gray image is empty");
+                    return null;
+                }
 
                 IntPointer detectedPersonPtr = new IntPointer(1);
                 DoublePointer confidencePtr = new DoublePointer(1);
 
-                faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
+                // CRITICAL: Synchronize on the FaceRecognizer instance to prevent concurrent access
+                // The recognizer maintains internal state that can be corrupted by concurrent predictions
+                synchronized (faceRecognizer) {
+                    faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
 
-                String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
-                String detectedPerson = label.substring(0, label.length() - 1);
-                double detectionConfidence = confidencePtr.get(0);
+                    String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
+                    String detectedPerson = label.substring(0, label.length() - 1);
+                    double detectionConfidence = confidencePtr.get(0);
 
-                if (detectionConfidence > MIN_SCORE) {
-                    log.debug("Detected person is {} with confidence {} but score is bigger than {} so result is {}.",
-                            detectedPerson, detectionConfidence, MIN_SCORE, UNKNOWN);
-                    detectedPerson = UNKNOWN;
-                } else {
-                    log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
+                    if (detectionConfidence > MIN_SCORE) {
+                        log.debug("Detected person is {} with confidence {} but score is bigger than {} so result is {}.",
+                                detectedPerson, detectionConfidence, MIN_SCORE, UNKNOWN);
+                        detectedPerson = UNKNOWN;
+                    } else {
+                        log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
+                    }
+
+                    return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
                 }
-
-                return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
             } catch(Exception e) {
-                log.error("Error processing face detection", e);
-                throw new RuntimeException("Error processing face detection", e);
+                log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
+                        faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height(), e);
+                return null;
             } finally {
-                matUtil.releaseResources(img);
+                matUtil.releaseResources(extractedFace, img);
             }
         }).filter(detected -> detected != null).toList();
 

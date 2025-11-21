@@ -46,6 +46,8 @@ public class RtspFrameExtractorService {
                 String transport = transportProtocol != null
                     ? transportProtocol.name().toLowerCase()
                     : "tcp";
+                boolean isUdp = "udp".equals(transport);
+
                 grabber.setOption("rtsp_transport", transport);
 
                 // Connection and timeout options
@@ -53,26 +55,57 @@ public class RtspFrameExtractorService {
                 grabber.setOption("stimeout", "20000000");        // Socket timeout
                 grabber.setOption("recv_timeout", "20000000");    // Receive timeout
 
-                // Probing options - must come before frame rate
-                grabber.setOption("probesize", "32");
-                grabber.setOption("analyzeduration", "0");
+                // Probing options - CRITICAL: Higher values for proper stream analysis
+                // 4K stream needs more probing to detect codec parameters correctly
+                grabber.setOption("probesize", "50000000");       // 50MB probe size for 4K
+                grabber.setOption("analyzeduration", "5000000");  // 5 seconds analysis
 
-                // Frame rate and buffering
+                // Frame rate
                 grabber.setFrameRate(30);
-                grabber.setOption("buffer_size", "2048000");
-                grabber.setOption("max_delay", "500000");
-                grabber.setOption("reorder_queue_size", "1000");
 
-                // Low latency and performance flags
-                grabber.setOption("fflags", "nobuffer+fastseek+flush_packets");
+                // Buffer size calculation for 4K support
+                // 4K frame (3840x2160) at 30fps with H.264:
+                // - Uncompressed: ~25MB per frame
+                // - Compressed (H.264): ~2-5MB per frame
+                // - Buffer needs to hold multiple frames for smooth playback
+                // - UDP needs larger buffer due to packet reordering
+                int bufferSize = isUdp ? 104857600 : 52428800;  // 100MB for UDP, 50MB for TCP
+                grabber.setOption("buffer_size", String.valueOf(bufferSize));
+
+                if (isUdp) {
+                    // UDP-specific settings to handle packet loss and reordering
+                    grabber.setOption("max_delay", "10000000");        // 10 seconds max delay for UDP
+                    grabber.setOption("reorder_queue_size", "5000");   // Larger reorder queue for UDP
+                    grabber.setOption("fifo_size", "500000");          // Large FIFO for UDP buffering
+
+                    // UDP packet handling
+                    grabber.setOption("overrun_nonfatal", "1");        // Don't fail on buffer overrun
+                    grabber.setOption("fflags", "+genpts+igndts+discardcorrupt"); // Generate PTS, ignore DTS, discard corrupt
+
+                    // Error resilience for UDP
+                    grabber.setOption("err_detect", "ignore_err");     // Ignore decoding errors
+                    grabber.setOption("skip_frame", "noref");          // Skip non-reference frames if needed
+
+                    log.info("Configured UDP-specific settings: buffer={}MB, reorder_queue=5000", bufferSize / 1048576);
+                } else {
+                    // TCP-specific settings for low latency
+                    grabber.setOption("max_delay", "500000");          // 0.5 seconds for TCP
+                    grabber.setOption("reorder_queue_size", "1000");   // Smaller queue for TCP
+                    grabber.setOption("fflags", "nobuffer+fastseek+flush_packets"); // Low latency flags
+                    grabber.setOption("rtsp_flags", "prefer_tcp");     // Prefer TCP
+
+                    log.info("Configured TCP-specific settings: buffer={}MB, low latency mode", bufferSize / 1048576);
+                }
+
+                // Common flags
                 grabber.setOption("flags", "low_delay");
+                grabber.setOption("flags2", "+export_mvs");            // Export motion vectors for validation
 
                 // Thread settings
                 grabber.setOption("threads", "auto");
 
                 // Additional reliability options
                 grabber.setOption("allowed_media_types", "video");
-                grabber.setOption("rtsp_flags", "prefer_tcp");
 
                 if (retryCount == 0) {
                     log.info("Attempting to start RTSP grabber with {} transport for: {}", transportProtocol, rtspUrl);
@@ -149,6 +182,7 @@ public class RtspFrameExtractorService {
                               String rtspUrl, Consumer<Mat> consumer) throws Exception {
         int nullFrameCount = 0;
         int maxNullFrames = 150;
+        int validFrameCount = 0;
 
         try {
             while (true) {
@@ -169,12 +203,15 @@ public class RtspFrameExtractorService {
                     nullFrameCount = 0;
 
                     if (frame.image != null) {
+                        // Basic dimension validation
                         if (frame.imageWidth <= 0 || frame.imageHeight <= 0) {
+                            log.debug("Invalid frame dimensions: {}x{}", frame.imageWidth, frame.imageHeight);
                             continue;
                         }
 
                         Mat nativeMat = converter.convert(frame);
                         if (nativeMat == null || nativeMat.empty()) {
+                            log.debug("Failed to convert frame to Mat");
                             continue;
                         }
 
@@ -182,14 +219,24 @@ public class RtspFrameExtractorService {
 
                         try { nativeMat.release(); } catch (Exception ignore) {}
 
+                        // Validate cloned image
                         if (img.empty() || img.cols() <= 0 || img.rows() <= 0) {
+                            log.debug("Cloned image is empty or has invalid dimensions");
                             try { img.release(); } catch (Exception ignore) {}
                             continue;
                         }
 
+
+                        // Skip grey/blank frames
                         if (isGreyFrame(img)) {
                             try { img.release(); } catch (Exception ignore) {}
                             continue;
+                        }
+
+                        validFrameCount++;
+                        if (validFrameCount % 1000 == 0) {
+                            log.debug("Processed {} valid frames from stream: {}",
+                                validFrameCount, rtspUrl);
                         }
 
                         consumer.accept(img);
@@ -201,12 +248,14 @@ public class RtspFrameExtractorService {
                 }
             }
         } finally {
-
+            log.info("Stream processing ended. Valid frames: {}, URL: {}",
+                validFrameCount, rtspUrl);
             try {
                 System.gc();
             } catch (Exception ignore) {}
         }
     }
+
 
     private boolean isGreyFrame(Mat img) {
         if (img == null || img.empty()) {

@@ -109,47 +109,107 @@ public class DeepLearningFaceDetectionService {
             ". Checked: /app/opencv/" + fileName + ", classpath:" + resourceName);
     }
 
-    public List<Rect> detect(Mat testImage) {//detect faces and draw a blue rectangle arroung each face
-
+    /**
+     * Detect faces in an image.
+     * THREAD-SAFE: Synchronized to prevent concurrent access to the shared Net object,
+     * which was causing false detections when multiple cameras were processing frames simultaneously.
+     */
+    public synchronized List<Rect> detect(Mat testImage) {
         List<Rect> faces = new ArrayList<>();
 
-        Mat output = null, ne = null, blob = null, image = null;
+        // Validate input
+        if (testImage == null || testImage.empty()) {
+            log.warn("Cannot detect faces in null or empty image");
+            return faces;
+        }
+
+        Mat output = null, ne = null, blob = null, image = null, resizedImage = null;
 
         try {
-            image = new Mat(testImage);
+            // Store original dimensions
+            int originalWidth = testImage.size().width();
+            int originalHeight = testImage.size().height();
 
-            resize(image, image, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE));//resize the image to match the input size of the model
+            // CRITICAL: Clone the input image to avoid any shared state issues across threads
+            // Even though method is synchronized, we clone to be extra safe
+            image = testImage.clone();
 
-            //create a 4-dimensional blob from image with NCHW (Number of images in the batch -for training only-, Channel, Height, Width) dimensions order,
-            //for more detailes read the official docs at https://docs.opencv.org/trunk/d6/d0f/group__dnn.html#gabd0e76da3c6ad15c08b01ef21ad55dd8
-            blob = blobFromImage(image, 1.0, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
+            // Validate clone
+            if (image == null || image.empty()) {
+                log.warn("Failed to clone input image for face detection");
+                return faces;
+            }
 
-            net.setInput(blob);//set the input to network model
-            output = net.forward();//feed forward the input to the netwrok to get the output matrix
+            // Create a separate resized image instead of resizing in-place
+            resizedImage = new Mat();
+            resize(image, resizedImage, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE));
 
-            ne = new Mat(new Size(output.size(3), output.size(2)), CV_32F, output.ptr(0, 0));//extract a 2d matrix for 4d output matrix with form of (number of detections x 7)
+            // Validate resized image
+            if (resizedImage.empty()) {
+                log.warn("Failed to resize image for face detection");
+                return faces;
+            }
 
-            FloatIndexer srcIndexer = ne.createIndexer(); // create indexer to access elements of the matric
+            // Create blob from resized image
+            // NCHW: Number of images, Channels, Height, Width
+            blob = blobFromImage(resizedImage, 1.0, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE),
+                                new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
 
-            for (int i = 0; i < output.size(3); i++) {//iterate to extract elements
+            if (blob == null || blob.empty()) {
+                log.warn("Failed to create blob from image");
+                return faces;
+            }
+
+            // CRITICAL: These operations on shared 'net' object must be atomic
+            net.setInput(blob);
+            output = net.forward();
+
+            if (output == null || output.empty()) {
+                log.warn("Neural network forward pass returned empty output");
+                return faces;
+            }
+
+            // Extract 2D matrix from 4D output (detections x 7)
+            ne = new Mat(new Size(output.size(3), output.size(2)), CV_32F, output.ptr(0, 0));
+
+            if (ne.empty()) {
+                log.warn("Failed to extract detection matrix from network output");
+                return faces;
+            }
+
+            FloatIndexer srcIndexer = ne.createIndexer();
+
+            // Iterate through detections
+            for (int i = 0; i < output.size(3); i++) {
                 float confidence = srcIndexer.get(i, 2);
-                float f1 = srcIndexer.get(i, 3);
-                float f2 = srcIndexer.get(i, 4);
-                float f3 = srcIndexer.get(i, 5);
-                float f4 = srcIndexer.get(i, 6);
-                if (confidence > .6) {
-                    float tx = f1 * MODEL_INPUT_SIZE;//top left point's x
-                    float ty = f2 * MODEL_INPUT_SIZE;//top left point's y
-                    float bx = f3 * MODEL_INPUT_SIZE;//bottom right point's x
-                    float by = f4 * MODEL_INPUT_SIZE;//bottom right point's y
-                    faces.add(createReact(tx, ty, bx, by, testImage.size().width(), testImage.size().height()));
+
+                if (confidence > 0.6) {
+                    float f1 = srcIndexer.get(i, 3); // x1
+                    float f2 = srcIndexer.get(i, 4); // y1
+                    float f3 = srcIndexer.get(i, 5); // x2
+                    float f4 = srcIndexer.get(i, 6); // y2
+
+                    float tx = f1 * MODEL_INPUT_SIZE; // top left x
+                    float ty = f2 * MODEL_INPUT_SIZE; // top left y
+                    float bx = f3 * MODEL_INPUT_SIZE; // bottom right x
+                    float by = f4 * MODEL_INPUT_SIZE; // bottom right y
+
+                    Rect faceRect = createReact(tx, ty, bx, by, originalWidth, originalHeight);
+                    faces.add(faceRect);
                 }
             }
 
+            if (!faces.isEmpty()) {
+                log.debug("Detected {} face(s) in image", faces.size());
+            }
+
         } catch (Exception e) {
-            throw new RuntimeException("Error during face detection", e);
+            log.error("Error during face detection", e);
+            // Return empty list instead of throwing - more resilient
+            return new ArrayList<>();
         } finally {
-            matUtil.releaseResources(ne, output, blob, image);
+            // Release all resources in reverse order of creation
+            matUtil.releaseResources(ne, output, blob, resizedImage, image);
         }
 
         return faces;
