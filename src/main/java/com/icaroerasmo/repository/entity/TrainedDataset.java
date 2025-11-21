@@ -14,7 +14,6 @@ public class TrainedDataset {
     @Column(name = "id")
     private Long id = 1L;
 
-    @Lob
-    @Column(name = "model_xml", nullable = false)
+    @Column(name = "model_xml", nullable = false, columnDefinition = "BLOB")
     private byte[] modelXml;
 }

@@ -6,6 +6,7 @@ import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionHistoryService;
 import com.icaroerasmo.service.FaceRecognitionService;
+import com.icaroerasmo.service.FaceRecognizerHolder;
 import com.icaroerasmo.service.TelegramPublisherService;
 import com.icaroerasmo.service.RtspFrameExtractorService;
 import com.icaroerasmo.utils.MatUtil;
@@ -37,6 +38,7 @@ public class RtspRecognitionRunner {
     private static final AtomicInteger COUNT = new AtomicInteger(0);
 
     private final FaceRecognitionService faceRecognitionService;
+    private final FaceRecognizerHolder faceRecognizerHolder;
     private final RtspFrameExtractorService rtspFrameExtractorService;
     private final MatUtil matUtil;
     private final TelegramPublisherService telegramPublisherService;
@@ -46,13 +48,12 @@ public class RtspRecognitionRunner {
 
     public void start(String... args) throws Exception {
 
-        FaceRecognizer faceRecognizer = null;
-
         try {
             File trainingRootDir = getTrainedFile();
-            faceRecognizer = faceRecognitionService.ensureTrained(trainingRootDir.toPath());
+            FaceRecognizer faceRecognizer = faceRecognitionService.ensureTrained(trainingRootDir.toPath());
 
-            final FaceRecognizer finalFaceRecognizer = faceRecognizer;
+            // Initialize the holder with the trained recognizer
+            faceRecognizerHolder.updateRecognizer(faceRecognizer);
 
             List<CameraProperties> cameraProperties = streamsProperties.getCameras();
             if (cameraProperties == null || cameraProperties.isEmpty()) {
@@ -70,7 +71,7 @@ public class RtspRecognitionRunner {
 
                 // Submit camera processing task to executor
                 Future<?> future = executorService.submit(() -> {
-                    processCameraStream(camera, finalFaceRecognizer);
+                    processCameraStream(camera);
                 });
                 futures.add(future);
             }
@@ -86,19 +87,16 @@ public class RtspRecognitionRunner {
 
             executorService.shutdown();
 
-        } finally {
-            if (faceRecognizer != null) {
-                try {
-                    faceRecognizer.close();
-                } catch (Exception ignore) {}
-            }
+        } catch (Exception e) {
+            log.error("Error in RtspRecognitionRunner", e);
+            throw e;
         }
     }
 
     /**
      * Process a single camera stream
      */
-    private void processCameraStream(CameraProperties cameraProperties, FaceRecognizer finalFaceRecognizer) {
+    private void processCameraStream(CameraProperties cameraProperties) {
         String cameraName = cameraProperties.getName() != null ? cameraProperties.getName() : "unknown";
         String rtspUrl = cameraProperties.getUrl();
 
@@ -115,7 +113,14 @@ public class RtspRecognitionRunner {
                         return;
                     }
 
-                    faceRecognition = faceRecognitionService.test(finalFaceRecognizer, img);
+                    // Get the current recognizer from the holder (thread-safe)
+                    FaceRecognizer currentRecognizer = faceRecognizerHolder.get();
+                    if (currentRecognizer == null) {
+                        log.warn("FaceRecognizer not initialized yet, skipping frame");
+                        return;
+                    }
+
+                    faceRecognition = faceRecognitionService.test(currentRecognizer, img);
 
                     if (faceRecognition == null) {
                         return;

@@ -1,7 +1,11 @@
 spring:
   datasource:
-    url: "jdbc:sqlite::memory:"
+    url: "jdbc:sqlite:/app/data/face-recognition.db?busy_timeout=30000&journal_mode=WAL"
     driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      connection-timeout: 30000
+      validation-timeout: 5000
 
   jpa:
     hibernate:
@@ -10,6 +14,11 @@ spring:
       hibernate:
         # Explicitly set Hibernate dialect to the official SQLiteDialect
         dialect: org.hibernate.community.dialect.SQLiteDialect
+        # Improve transaction handling
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
 
   config:
     # Allow pointing to an external config folder via environment or system property

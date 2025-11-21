@@ -199,10 +199,6 @@ public class DeepLearningFaceDetectionService {
                 }
             }
 
-            if (!faces.isEmpty()) {
-                log.debug("Detected {} face(s) in image", faces.size());
-            }
-
         } catch (Exception e) {
             log.error("Error during face detection", e);
             // Return empty list instead of throwing - more resilient

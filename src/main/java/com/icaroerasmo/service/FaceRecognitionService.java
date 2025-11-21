@@ -15,6 +15,7 @@ import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.bytedeco.opencv.opencv_face.LBPHFaceRecognizer;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.io.IOException;
@@ -143,13 +144,19 @@ public class FaceRecognitionService {
         return new FaceRecognition(detectedFaces, testImage);
     }
 
+    @Transactional
     public FaceRecognizer train(Path rootFolder) throws IOException {
         Path rootFolderPath = rootFolder;
-        Map<Path, Object[]> fileList = Files.list(rootFolderPath)
+
+        // Use try-with-resources to properly close streams
+        Map<Path, Object[]> fileList;
+        try (var rootStream = Files.list(rootFolderPath)) {
+            fileList = rootStream
                 .filter(file -> file.toFile().isDirectory())
                 .flatMap(folder -> {
                     try {
                         var personName = folder.getName(folder.getNameCount() - 1).toString();
+                        // Need to collect to list to avoid nested stream issues
                         return Files.list(folder).map(file -> Map.entry(file, personName));
                     } catch (IOException e) {
                         throw new RuntimeException(e);
@@ -175,6 +182,7 @@ public class FaceRecognitionService {
                 })
                 .filter(entry -> entry != null)
                 .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
+        }
 
         MatVector images = new MatVector(fileList.size());
 
@@ -213,16 +221,16 @@ public class FaceRecognitionService {
         byte[] xmlBytes = java.nio.file.Files.readAllBytes(tmp);
         java.nio.file.Files.deleteIfExists(tmp);
 
-        trainedDatasetRepository.deleteAll();
-        TrainedDataset trained = new TrainedDataset();
-        trained.setModelXml(xmlBytes);
-        trainedDatasetRepository.save(trained);
+        // Save to database with retry logic for SQLite lock contention
+        saveTrainedDatasetWithRetry(xmlBytes);
 
         matUtil.clearMatVector(images);
 
         Map<String, String> personHashes = new java.util.HashMap<>();
-        Files.list(rootFolderPath)
-                .filter(path -> path.toFile().isDirectory())
+
+        // Properly close the stream to avoid resource leaks
+        try (var stream = Files.list(rootFolderPath)) {
+            stream.filter(path -> path.toFile().isDirectory())
                 .forEach(personFolder -> {
                     String personName = personFolder.getFileName().toString();
                     try {
@@ -232,16 +240,85 @@ public class FaceRecognitionService {
                         log.warn("Failed to compute hash for folder {}", personFolder, e);
                     }
                 });
+        }
 
-        trainingMetadataRepository.deleteAll();
-        personHashes.forEach((personName, hash) -> {
-            TrainingMetadata metadata = new TrainingMetadata();
-            metadata.setPersonName(personName);
-            metadata.setFolderHash(hash);
-            trainingMetadataRepository.save(metadata);
-        });
+        // Save metadata with retry logic
+        saveTrainingMetadataWithRetry(personHashes);
 
         return faceRecognizer;
+    }
+
+    /**
+     * Save trained dataset to database with retry logic for lock contention
+     */
+    private void saveTrainedDatasetWithRetry(byte[] xmlBytes) {
+        int maxRetries = 5;
+        int retryDelayMs = 200;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                trainedDatasetRepository.deleteAll();
+                TrainedDataset trained = new TrainedDataset();
+                trained.setModelXml(xmlBytes);
+                trainedDatasetRepository.save(trained);
+                log.debug("Successfully saved trained dataset to database on attempt {}", attempt);
+                return; // Success
+            } catch (org.springframework.dao.CannotAcquireLockException |
+                     org.springframework.dao.TransientDataAccessResourceException e) {
+                if (attempt < maxRetries) {
+                    long delay = retryDelayMs * (long) Math.pow(2, attempt - 1);
+                    log.warn("Database locked while saving trained dataset (attempt {}/{}). Retrying in {}ms...",
+                            attempt, maxRetries, delay);
+                    try {
+                        Thread.sleep(delay);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrupted while retrying database save", ie);
+                    }
+                } else {
+                    log.error("Failed to save trained dataset after {} attempts due to database lock", maxRetries);
+                    throw new RuntimeException("Database is locked - failed to save trained dataset after retries", e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Save training metadata to database with retry logic for lock contention
+     */
+    private void saveTrainingMetadataWithRetry(Map<String, String> personHashes) {
+        int maxRetries = 5;
+        int retryDelayMs = 200;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                trainingMetadataRepository.deleteAll();
+                personHashes.forEach((personName, hash) -> {
+                    TrainingMetadata metadata = new TrainingMetadata();
+                    metadata.setPersonName(personName);
+                    metadata.setFolderHash(hash);
+                    trainingMetadataRepository.save(metadata);
+                });
+                log.debug("Successfully saved training metadata to database on attempt {}", attempt);
+                return; // Success
+            } catch (org.springframework.dao.CannotAcquireLockException |
+                     org.springframework.dao.TransientDataAccessResourceException e) {
+                if (attempt < maxRetries) {
+                    long delay = retryDelayMs * (long) Math.pow(2, attempt - 1);
+                    log.warn("Database locked while saving training metadata (attempt {}/{}). Retrying in {}ms...",
+                            attempt, maxRetries, delay);
+                    try {
+                        Thread.sleep(delay);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrupted while retrying database save", ie);
+                    }
+                } else {
+                    log.error("Failed to save training metadata after {} attempts due to database lock", maxRetries);
+                    throw new RuntimeException("Database is locked - failed to save training metadata after retries", e);
+                }
+            }
+        }
     }
 
     public boolean isTrainingDataChanged(Path rootFolder) throws IOException {
@@ -250,8 +327,10 @@ public class FaceRecognitionService {
         log.info("Checking for training data changes in: {}", rootFolderPath);
 
         Map<String, String> currentHashes = new HashMap<>();
-        Files.list(rootFolderPath)
-                .filter(path -> path.toFile().isDirectory())
+
+        // Properly close the stream to avoid resource leaks
+        try (var stream = Files.list(rootFolderPath)) {
+            stream.filter(path -> path.toFile().isDirectory())
                 .forEach(personFolder -> {
                     String personName = personFolder.getFileName().toString();
                     try {
@@ -262,6 +341,7 @@ public class FaceRecognitionService {
                         log.warn("Failed to compute hash for folder {}", personFolder, e);
                     }
                 });
+        }
 
         log.info("Found {} person folders in training directory", currentHashes.size());
 
@@ -347,8 +427,10 @@ public class FaceRecognitionService {
         }
 
         long[] fileCount = {0};
-        Files.walk(folder)
-                .filter(Files::isRegularFile)
+
+        // Properly close the stream to avoid resource leaks
+        try (var stream = Files.walk(folder)) {
+            stream.filter(Files::isRegularFile)
                 .sorted()
                 .forEach(path -> {
                     try {
@@ -360,6 +442,7 @@ public class FaceRecognitionService {
                         throw new RuntimeException(e);
                     }
                 });
+        }
 
         log.debug("  Total files processed for {}: {}", folder.getFileName(), fileCount[0]);
 
