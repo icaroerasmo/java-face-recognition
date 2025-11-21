@@ -150,17 +150,12 @@ public class RtspRecognitionRunner {
                                     (existing, replacement) -> existing // Keep first if duplicate
                             ));
 
-                    // Check if we have recognized people (non-Unknown)
-                    boolean hasRecognizedPeople = detectedPeopleWithScores.keySet().stream()
-                            .anyMatch(name -> !"Unknown".equalsIgnoreCase(name));
+                    // Send notification for ALL detections with score <= 100 (recognized or Unknown)
+                    String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
+                    log.info("Pessoas detectadas em '{}': {}", cameraName, namesStr);
 
-                    // Publish if we have recognized people OR if unknown should be announced
-                    if (hasRecognizedPeople) {
-                        String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
-                        log.info("Pessoas detectadas em '{}': {}", cameraName, namesStr);
-
-                        // Publish to Telegram with detected people information
-                        try {
+                    // Publish to Telegram with detected people information
+                    try {
                             Mat finalImg = img.clone();
                             faces.forEach(output -> {
                                 if (output.getFaceRect() != null && output.getPersonName() != null) {
@@ -190,7 +185,6 @@ public class RtspRecognitionRunner {
                         } catch (Exception e) {
                             log.error("Failed to publish detection to Telegram for camera '{}'", cameraName, e);
                         }
-                    }
 
                 } catch (Exception e) {
                     log.error("Error processing frame from camera '{}'", cameraName, e);
