@@ -170,15 +170,52 @@ public class RtspRecognitionRunner {
                             buf.get(imageBytes);
                             buf.deallocate();
 
+                            // Extract face region for similarity comparison
+                            byte[] faceHash = null;
+                            if (!faces.isEmpty()) {
+                                FaceRecognition.DetectedFaces firstFace = faces.get(0);
+                                if (firstFace.getFaceRect() != null) {
+                                    try {
+                                        // Extract the face region from original image
+                                        Mat faceRegion = new Mat(img, firstFace.getFaceRect());
+
+                                        // Convert face to byte array for hashing
+                                        org.bytedeco.javacpp.BytePointer faceBuf = new org.bytedeco.javacpp.BytePointer();
+                                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(
+                                                new org.bytedeco.javacpp.BytePointer(".jpg"), faceRegion, faceBuf);
+                                        faceHash = new byte[(int) faceBuf.limit()];
+                                        faceBuf.get(faceHash);
+                                        faceBuf.deallocate();
+
+                                        matUtil.releaseResources(faceRegion);
+                                    } catch (Exception e) {
+                                        log.warn("Failed to extract face region for camera '{}': {}", cameraName, e.getMessage());
+                                    }
+                                }
+                            }
+
                             // Compute image hash and check if this detection should be sent
                             String imageHash = detectionHistoryService.computeImageHash(imageBytes);
                             String detectedPeopleKey = String.join(",", detectedPeopleWithScores.keySet());
 
-                            if (detectionHistoryService.shouldSendDetection(imageHash, detectedPeopleKey, cameraName)) {
-                                // Publish to Telegram with detected people information
-                                telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
+                            // Check if this is an unknown detection
+                            boolean isUnknown = detectedPeopleKey.contains("Unknown");
+
+                            if (isUnknown) {
+                                // Queue unknown detection - wait 3 seconds to see if person gets recognized
+                                String queuedKey = detectionHistoryService.queueUnknownDetection(
+                                        imageHash, detectedPeopleKey, cameraName, imageBytes, detectedPeopleWithScores, faceHash);
+                                if (queuedKey != null) {
+                                    log.debug("Unknown detection queued for camera '{}' with key: {}", cameraName, queuedKey);
+                                }
                             } else {
-                                log.debug("Skipping duplicate detection for camera '{}' with people: {}", cameraName, detectedPeopleKey);
+                                // Known person - check if we should send immediately
+                                if (detectionHistoryService.shouldSendDetection(imageHash, detectedPeopleKey, cameraName, faceHash)) {
+                                    // Publish to Telegram with detected people information
+                                    telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
+                                } else {
+                                    log.debug("Skipping duplicate detection for camera '{}' with people: {}", cameraName, detectedPeopleKey);
+                                }
                             }
 
                             matUtil.releaseResources(finalImg);
