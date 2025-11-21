@@ -17,5 +17,5 @@ public class StreamsProperties {
     /**
      * Camera configurations with name and RTSP URL
      */
-    private List<Camera> cameras = new ArrayList<>();
+    private List<CameraProperties> cameras = new ArrayList<>();
 }

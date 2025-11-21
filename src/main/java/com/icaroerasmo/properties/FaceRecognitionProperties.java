@@ -19,5 +19,5 @@ public class FaceRecognitionProperties {
     private TrainingProperties training = new TrainingProperties();
 
     @NestedConfigurationProperty
-    private MqttProperties mqtt = new MqttProperties();
+    private TelegramProperties telegram = new TelegramProperties();
 }

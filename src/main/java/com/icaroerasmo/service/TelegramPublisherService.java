@@ -22,8 +22,8 @@ public class TelegramPublisherService {
 
     /**
      * Sends face detection images to Telegram:
-     * - Recognized persons: Image with person's name in caption
-     * - Unknown persons: Image with "Unknown Person" in caption
+     * - Recognized people: Image with person's name in caption
+     * - Unknown people: Image with "Unknown Person" in caption
      */
     public void publishDetection(byte[] imageBytes, Map<String, Double> detectedPeopleWithScores, String cameraName) {
 
