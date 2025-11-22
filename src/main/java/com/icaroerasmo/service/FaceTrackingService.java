@@ -8,7 +8,8 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
+import jakarta.annotation.PreDestroy;
 
 /**
  * Service to track unknown faces across multiple frames.
@@ -19,18 +20,46 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class FaceTrackingService {
 
+    private final TelegramPublisherService telegramPublisherService;
+    private final DetectionHistoryService detectionHistoryService;
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
+
     // Track unknown faces per camera
     private final Map<String, List<TrackedFace>> trackedFaces = new ConcurrentHashMap<>();
 
+    // Timeout for sending notification if person not detected anymore (2 seconds)
+    private static final long NOTIFICATION_TIMEOUT_MS = 2000;
+
+    public FaceTrackingService(TelegramPublisherService telegramPublisherService,
+                               DetectionHistoryService detectionHistoryService) {
+        this.telegramPublisherService = telegramPublisherService;
+        this.detectionHistoryService = detectionHistoryService;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("Shutting down FaceTrackingService scheduler");
+        scheduler.shutdown();
+        try {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            scheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // Minimum number of frames to track before sending notification
-    // Requires 5 detections of same person before sending to Telegram
-    private static final int MIN_TRACKING_FRAMES = 5;
+    // Requires 8 detections of same person before sending to Telegram
+    private static final int MIN_TRACKING_FRAMES = 8;
 
     // Maximum time to track a face (10 seconds)
     private static final long MAX_TRACKING_TIME_MS = 10 * 1000;
 
     // Maximum distance between face positions to consider it the same face (pixels)
-    private static final double MAX_POSITION_DISTANCE = 150.0;
+    // Increased to 300px to handle fast-moving people without breaking tracks
+    private static final double MAX_POSITION_DISTANCE = 300.0;
 
     // Face similarity threshold for tracking (extremely lenient)
     // Higher value = more lenient matching (allows more hash differences)
@@ -54,22 +83,110 @@ public class FaceTrackingService {
     public static class TrackingResult {
         private final boolean shouldSend;
         private final String personName; // Determined identity (most common across frames)
-        private final Rect bestRect;
         private final byte[] bestFaceHash;
         private final double bestConfidenceScore;
         private final byte[] bestImageBytes; // Image bytes of the best frame
 
         public static TrackingResult notReady() {
-            return new TrackingResult(false, null, null, null, 0.0, null);
-        }
-
-        public static TrackingResult ready(String personName, Rect rect, byte[] faceHash, double score, byte[] imageBytes) {
-            return new TrackingResult(true, personName, rect, faceHash, score, imageBytes);
+            return new TrackingResult(false, null, null, 0.0, null);
         }
     }
 
     /**
-     * Track a face detection (can be known or unknown)
+     * Schedule a timeout notification that will be sent if person is not detected again
+     * This ensures notifications are sent even if person leaves before threshold is reached
+     */
+    private void scheduleTimeoutNotification(TrackedFace track, String cameraName, List<TrackedFace> cameraTrackedFaces) {
+        track.pendingNotification = scheduler.schedule(() -> {
+            try {
+                // Check if track still exists (might have been removed/sent already)
+                if (!cameraTrackedFaces.contains(track)) {
+                    log.debug("Track already removed, skipping timeout notification");
+                    return;
+                }
+
+                int frameCount = track.observations.size();
+                long trackingDuration = System.currentTimeMillis() - track.firstSeen;
+                double distanceMoved = track.getTotalDistanceMoved();
+
+                // Determine identity from accumulated observations
+                String determinedIdentity = track.getMostCommonIdentity();
+
+                log.info("⏰ TIMEOUT NOTIFICATION: Camera '{}' - Person '{}' disappeared after {} frames over {}ms (moved {}px) - sending notification",
+                        cameraName, determinedIdentity, frameCount, trackingDuration, (int)distanceMoved);
+
+                // Get best frame data
+                byte[] bestFaceHash = track.getBestFaceHash();
+                double bestScore = track.getBestConfidenceScore();
+                byte[] bestImageBytes = track.getBestImageBytes();
+
+                // Send notification
+                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash);
+
+                // Remove from tracking and cleanup
+                cameraTrackedFaces.remove(track);
+                track.cleanup();
+
+            } catch (Exception e) {
+                log.error("Error in timeout notification for camera '{}': {}", cameraName, e.getMessage(), e);
+            }
+        }, NOTIFICATION_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+
+        log.debug("Scheduled timeout notification in {}ms for tracked face", NOTIFICATION_TIMEOUT_MS);
+    }
+
+    /**
+     * Send notification immediately with cooldown check
+     */
+    private void sendNotificationNow(String cameraName, String determinedIdentity, double bestScore,
+                                     byte[] bestImageBytes, byte[] bestFaceHash) {
+        try {
+            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}",
+                cameraName, determinedIdentity, String.format("%.2f", bestScore));
+
+            if (bestImageBytes == null || bestImageBytes.length == 0) {
+                log.error("Cannot send notification: image bytes is null or empty");
+                return;
+            }
+
+            boolean isUnknown = "Unknown".equalsIgnoreCase(determinedIdentity);
+
+            // Compute image hash for detection history
+            String imageHash = detectionHistoryService.computeImageHash(bestImageBytes);
+
+            // Check if we recently sent this person (using appropriate method)
+            boolean shouldSend = isUnknown
+                    ? detectionHistoryService.shouldSendUnknownDetection(imageHash, determinedIdentity, cameraName, bestFaceHash)
+                    : detectionHistoryService.shouldSendDetection(imageHash, determinedIdentity, cameraName, bestFaceHash);
+
+            log.info("📊 COOLDOWN CHECK: shouldSend={}, isUnknown={}, identity={}",
+                shouldSend, isUnknown, determinedIdentity);
+
+            if (shouldSend) {
+                // Create scores map with determined identity and best score
+                Map<String, Double> bestScores = Map.of(determinedIdentity, bestScore);
+
+                log.info("📤 CALLING TELEGRAM API: imageSize={} bytes", bestImageBytes.length);
+
+                // Send notification with BEST frame image and determined identity
+                telegramPublisherService.publishDetection(bestImageBytes, bestScores, cameraName);
+
+                log.info("✅ NOTIFICATION SENT SUCCESSFULLY for '{}'", determinedIdentity);
+
+                // Mark as sent to prevent duplicates
+                if (isUnknown) {
+                    detectionHistoryService.markUnknownDetectionAsSent(imageHash, determinedIdentity, cameraName, bestFaceHash);
+                }
+            } else {
+                log.info("⏭️ SKIPPING: '{}' already sent recently for camera '{}'", determinedIdentity, cameraName);
+            }
+        } catch (Exception e) {
+            log.error("❌ FAILED to send notification for camera '{}': {}", cameraName, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Find a tracked face that matches the current detection
      * Returns TrackingResult with most common identity and best frame if ready to send notification
      *
      * @param cameraName Name of the camera
@@ -103,6 +220,11 @@ public class FaceTrackingService {
                     cameraName, frameCount, trackingDuration, (int)matchedTrack.getTotalDistanceMoved(),
                     String.format("%.2f", matchedTrack.getBestConfidenceScore()), personName);
 
+            // Cancel any existing timeout notification and schedule a new one
+            // This ensures notification is sent if person disappears before reaching threshold
+            matchedTrack.cancelPendingNotification();
+            scheduleTimeoutNotification(matchedTrack, cameraName, cameraTrackedFaces);
+
             // Check if we've tracked long enough
             if (frameCount >= MIN_TRACKING_FRAMES && trackingDuration >= MIN_TRACKING_DURATION_MS) {
                 // Check if face is actually moving (not static)
@@ -111,20 +233,25 @@ public class FaceTrackingService {
                     // Determine the most common identity
                     String determinedIdentity = matchedTrack.getMostCommonIdentity();
 
-                    log.info("Camera '{}': Face tracked through {} frames over {}ms, moved {}px, determined identity: '{}', best score: {} - sending notification",
+                    log.info("Camera '{}': Face tracked through {} frames over {}ms, moved {}px, determined identity: '{}', best score: {} - sending notification immediately (threshold reached)",
                             cameraName, frameCount, trackingDuration, (int)distanceMoved, determinedIdentity,
                             String.format("%.2f", matchedTrack.getBestConfidenceScore()));
 
+                    // Cancel timeout since we're sending immediately
+                    matchedTrack.cancelPendingNotification();
+
                     // Get best frame data before cleanup
-                    Rect bestRect = matchedTrack.getBestRect();
                     byte[] bestFaceHash = matchedTrack.getBestFaceHash();
                     double bestScore = matchedTrack.getBestConfidenceScore();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
 
+                    // Send notification immediately
+                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash);
+
                     // Remove from tracking and cleanup resources
                     cameraTrackedFaces.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return TrackingResult.ready(determinedIdentity, bestRect, bestFaceHash, bestScore, bestImageBytes);
+                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes);
                 } else {
                     log.debug("Camera '{}': Face appears static (moved only {}px) - continuing to track",
                             cameraName, (int)distanceMoved);
@@ -149,13 +276,12 @@ public class FaceTrackingService {
                             String.format("%.2f", matchedTrack.getBestConfidenceScore()));
 
                     // Get best frame data before cleanup
-                    Rect bestRect = matchedTrack.getBestRect();
                     byte[] bestFaceHash = matchedTrack.getBestFaceHash();
                     double bestScore = matchedTrack.getBestConfidenceScore();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
                     cameraTrackedFaces.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return TrackingResult.ready(determinedIdentity, bestRect, bestFaceHash, bestScore, bestImageBytes);
+                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes);
                 }
             }
 
@@ -165,37 +291,16 @@ public class FaceTrackingService {
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
             TrackedFace newTrack = new TrackedFace(clonedRect, faceHash, now, confidenceScore, personName, imageBytes);
             cameraTrackedFaces.add(newTrack);
-            log.debug("Camera '{}': Started tracking new face '{}' at position ({}, {}) with score {}",
+
+            // Schedule timeout notification in case person disappears
+            scheduleTimeoutNotification(newTrack, cameraName, cameraTrackedFaces);
+
+            log.debug("Camera '{}': Started tracking new face '{}' at position ({}, {}) with score {} (timeout notification scheduled)",
                     cameraName, personName, faceRect.x(), faceRect.y(), String.format("%.2f", confidenceScore));
             return TrackingResult.notReady(); // Just started tracking
         }
     }
 
-    /**
-     * Cancel tracking for faces similar to a known person
-     * This is called when a known person is detected to cancel any pending unknown tracks
-     */
-    public void cancelSimilarTracks(String cameraName, byte[] faceHash) {
-        if (faceHash == null) {
-            return;
-        }
-
-        List<TrackedFace> cameraTrackedFaces = trackedFaces.get(cameraName);
-        if (cameraTrackedFaces == null || cameraTrackedFaces.isEmpty()) {
-            return;
-        }
-
-        cameraTrackedFaces.removeIf(track -> {
-            int similarity = computeFaceHashSimilarity(faceHash, track.getLatestFaceHash());
-            if (similarity <= TRACKING_SIMILARITY_THRESHOLD) {
-                log.info("Camera '{}': Cancelling tracked unknown face - matched with known person (similarity: {})",
-                        cameraName, similarity);
-                track.cleanup(); // Clean up native resources
-                return true;
-            }
-            return false;
-        });
-    }
 
     /**
      * Find a tracked face that matches the current detection
@@ -306,6 +411,7 @@ public class FaceTrackingService {
         private long lastSeen;
         private final List<FaceObservation> observations = new ArrayList<>();
         private FaceObservation bestObservation; // Track the best scoring observation
+        private ScheduledFuture<?> pendingNotification; // Timeout notification future
 
         public TrackedFace(Rect initialRect, byte[] initialFaceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes) {
             this.firstSeen = timestamp;
@@ -334,9 +440,6 @@ public class FaceTrackingService {
             return observations.get(observations.size() - 1).faceHash;
         }
 
-        public Rect getBestRect() {
-            return bestObservation != null ? bestObservation.rect : getLatestRect();
-        }
 
         public byte[] getBestFaceHash() {
             return bestObservation != null ? bestObservation.faceHash : getLatestFaceHash();
@@ -416,9 +519,21 @@ public class FaceTrackingService {
         }
 
         /**
-         * Clean up native resources (deallocate Rect objects)
+         * Cancel any pending timeout notification
+         */
+        public void cancelPendingNotification() {
+            if (pendingNotification != null && !pendingNotification.isDone()) {
+                pendingNotification.cancel(false);
+                log.debug("Cancelled pending timeout notification for tracked face");
+            }
+            pendingNotification = null;
+        }
+
+        /**
+         * Clean up native resources (deallocate Rect objects) and cancel pending notifications
          */
         public void cleanup() {
+            cancelPendingNotification();
             for (FaceObservation observation : observations) {
                 if (observation.rect != null) {
                     observation.rect.deallocate();

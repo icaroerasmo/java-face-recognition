@@ -243,7 +243,6 @@ public class RtspRecognitionRunner {
 
                             // Compute image hash and check if this detection should be sent
                             String imageHash = detectionHistoryService.computeImageHash(imageBytes);
-                            String detectedPeopleKey = String.join(",", detectedPeopleWithScores.keySet());
 
                             // Use face tracking for ALL persons (both known and unknown)
                             // Track the face across multiple frames to determine true identity
