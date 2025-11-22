@@ -130,6 +130,29 @@ public class DetectionHistoryService {
                                        byte[] imageBytes, Map<String, Double> detectedPeopleWithScores, byte[] faceHash) {
         long now = System.currentTimeMillis();
 
+        // Check if we already sent this unknown person recently (within cooldown)
+        String compositeKey = cameraName + ":" + detectedPeopleKey;
+        DetectionRecord lastDetection = detectionHistory.get(compositeKey);
+        if (lastDetection != null) {
+            long timeSinceLastDetection = now - lastDetection.timestamp;
+            if (timeSinceLastDetection < DETECTION_COOLDOWN_MS) {
+                // Check face similarity if available
+                if (lastDetection.faceHash != null && faceHash != null) {
+                    int similarity = computeFaceHashSimilarity(faceHash, lastDetection.faceHash);
+                    if (similarity <= SIMILARITY_THRESHOLD) {
+                        log.debug("Blocking Unknown notification for camera '{}' - already sent similar unknown {}ms ago (similarity: {})",
+                                cameraName, timeSinceLastDetection, similarity);
+                        return null;
+                    }
+                } else {
+                    // No face hash available, just use time-based cooldown
+                    log.debug("Blocking Unknown notification for camera '{}' - already sent {}ms ago (within cooldown)",
+                            cameraName, timeSinceLastDetection);
+                    return null;
+                }
+            }
+        }
+
         // Check if we recently detected a known person with similar face
         CameraDetectionHistory camHistory = cameraHistory.get(cameraName);
         if (camHistory != null) {
@@ -183,6 +206,23 @@ public class DetectionHistoryService {
         });
 
         return readyDetections;
+    }
+
+    /**
+     * Mark an unknown detection as sent to prevent duplicate notifications
+     * This is called after successfully sending an unknown detection to Telegram
+     */
+    public void markUnknownDetectionAsSent(String imageHash, String detectedPeopleKey, String cameraName, byte[] faceHash) {
+        String compositeKey = cameraName + ":" + detectedPeopleKey;
+        long now = System.currentTimeMillis();
+
+        // Store in detection history to prevent re-sending for cooldown period
+        detectionHistory.put(compositeKey, new DetectionRecord(imageHash, now, detectedPeopleKey, faceHash));
+
+        // Update camera history
+        updateCameraHistory(cameraName, imageHash, now, detectedPeopleKey, faceHash);
+
+        log.debug("Marked unknown detection as sent for {}: {}", cameraName, detectedPeopleKey);
     }
 
     /**

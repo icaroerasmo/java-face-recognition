@@ -165,31 +165,44 @@ public class RtspRecognitionRunner {
 
                             // Convert Mat to byte array using imencode
                             org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
-                            org.bytedeco.opencv.global.opencv_imgcodecs.imencode(new org.bytedeco.javacpp.BytePointer(".jpg"), finalImg, buf);
+                            org.bytedeco.javacpp.BytePointer jpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
+                            org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, finalImg, buf);
                             byte[] imageBytes = new byte[(int) buf.limit()];
                             buf.get(imageBytes);
                             buf.deallocate();
+                            jpgExt.deallocate();
 
                             // Extract face region for similarity comparison
                             byte[] faceHash = null;
                             if (!faces.isEmpty()) {
                                 FaceRecognition.DetectedFaces firstFace = faces.get(0);
                                 if (firstFace.getFaceRect() != null) {
+                                    org.bytedeco.javacpp.BytePointer faceBuf = null;
+                                    org.bytedeco.javacpp.BytePointer jpgExtFace = null;
+                                    Mat faceRegion = null;
                                     try {
                                         // Extract the face region from original image
-                                        Mat faceRegion = new Mat(img, firstFace.getFaceRect());
+                                        faceRegion = new Mat(img, firstFace.getFaceRect());
 
                                         // Convert face to byte array for hashing
-                                        org.bytedeco.javacpp.BytePointer faceBuf = new org.bytedeco.javacpp.BytePointer();
-                                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(
-                                                new org.bytedeco.javacpp.BytePointer(".jpg"), faceRegion, faceBuf);
+                                        faceBuf = new org.bytedeco.javacpp.BytePointer();
+                                        jpgExtFace = new org.bytedeco.javacpp.BytePointer(".jpg");
+                                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtFace, faceRegion, faceBuf);
                                         faceHash = new byte[(int) faceBuf.limit()];
                                         faceBuf.get(faceHash);
-                                        faceBuf.deallocate();
-
-                                        matUtil.releaseResources(faceRegion);
                                     } catch (Exception e) {
                                         log.warn("Failed to extract face region for camera '{}': {}", cameraName, e.getMessage());
+                                    } finally {
+                                        // Clean up resources
+                                        if (faceBuf != null) {
+                                            faceBuf.deallocate();
+                                        }
+                                        if (jpgExtFace != null) {
+                                            jpgExtFace.deallocate();
+                                        }
+                                        if (faceRegion != null) {
+                                            matUtil.releaseResources(faceRegion);
+                                        }
                                     }
                                 }
                             }
