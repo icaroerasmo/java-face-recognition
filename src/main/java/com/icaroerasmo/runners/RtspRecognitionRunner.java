@@ -93,7 +93,7 @@ public class RtspRecognitionRunner {
     }
 
     /**
-     * Process a single camera stream
+     * Process a single camera stream with automatic reconnection
      */
     private void processCameraStream(CameraProperties cameraProperties) {
         String cameraName = cameraProperties.getName() != null ? cameraProperties.getName() : "unknown";
@@ -101,25 +101,60 @@ public class RtspRecognitionRunner {
 
         log.info("Starting recognition for camera '{}' with {} transport: {}", cameraName, cameraProperties.getProtocol(), rtspUrl);
 
-        try {
-            rtspFrameExtractorService.extract(rtspUrl, cameraProperties.getProtocol(), (img) -> {
+        // Infinite reconnection loop with hibernate mechanism
+        int reconnectAttempt = 0;
+        int consecutiveFailures = 0;
+        boolean connectionNotified = false; // Track if we've sent connection success notification
+        final int HIBERNATE_AFTER_FAILURES = 3;
+        final long HIBERNATE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
-                FaceRecognition faceRecognition = null;
+        while (true) {
+            try {
+                if (reconnectAttempt > 0) {
+                    log.info("Reconnection attempt #{} for camera '{}'", reconnectAttempt, cameraName);
 
-                try {
-
-                    if (img == null) {
-                        return;
+                    // Send Telegram notification about reconnection attempt
+                    try {
+                        telegramPublisherService.sendTextMessage(
+                            String.format("🔄 Camera '%s': Attempting to reconnect (attempt #%d)...",
+                                cameraName, reconnectAttempt)
+                        );
+                    } catch (Exception e) {
+                        log.warn("Failed to send reconnection notification to Telegram: {}", e.getMessage());
                     }
+                }
 
-                    // Get the current recognizer from the holder (thread-safe)
-                    FaceRecognizer currentRecognizer = faceRecognizerHolder.get();
-                    if (currentRecognizer == null) {
-                        log.warn("FaceRecognizer not initialized yet, skipping frame");
-                        return;
+                // Send initial connection notification before starting extraction
+                if (!connectionNotified) {
+                    try {
+                        telegramPublisherService.sendTextMessage(
+                            String.format("✅ Camera '%s': Connected successfully and streaming", cameraName)
+                        );
+                        log.info("Camera '{}': Connection established successfully", cameraName);
+                        connectionNotified = true;
+                    } catch (Exception e) {
+                        log.warn("Failed to send connection notification to Telegram: {}", e.getMessage());
                     }
+                }
 
-                    faceRecognition = faceRecognitionService.test(currentRecognizer, img);
+                rtspFrameExtractorService.extract(rtspUrl, cameraProperties.getProtocol(), (img) -> {
+
+                    FaceRecognition faceRecognition = null;
+
+                    try {
+
+                        if (img == null) {
+                            return;
+                        }
+
+                        // Get the current recognizer from the holder (thread-safe)
+                        FaceRecognizer currentRecognizer = faceRecognizerHolder.get();
+                        if (currentRecognizer == null) {
+                            log.warn("FaceRecognizer not initialized yet, skipping frame");
+                            return;
+                        }
+
+                        faceRecognition = faceRecognitionService.test(currentRecognizer, img);
 
                     if (faceRecognition == null) {
                         return;
@@ -210,59 +245,110 @@ public class RtspRecognitionRunner {
                             String imageHash = detectionHistoryService.computeImageHash(imageBytes);
                             String detectedPeopleKey = String.join(",", detectedPeopleWithScores.keySet());
 
-                            // Check if this is an unknown detection
-                            boolean isUnknown = detectedPeopleKey.contains("Unknown");
+                            // Use face tracking for ALL persons (both known and unknown)
+                            // Track the face across multiple frames to determine true identity
+                            if (!faces.isEmpty()) {
+                                FaceRecognition.DetectedFaces firstFace = faces.get(0);
+                                log.info("🔍 FRAME PROCESSING: camera='{}', person='{}', confidence={}, rect={}, faceHash={}, imageBytes={}",
+                                    cameraName,
+                                    firstFace.getPersonName(),
+                                    String.format("%.2f", firstFace.getConfidence()),
+                                    (firstFace.getFaceRect() != null),
+                                    (faceHash != null ? faceHash.length : 0),
+                                    (imageBytes != null ? imageBytes.length : 0));
 
-                            if (isUnknown) {
-                                // Use face tracking for unknown persons
-                                // Track the face across multiple frames to see if it's moving
-                                if (!faces.isEmpty()) {
-                                    FaceRecognition.DetectedFaces firstFace = faces.get(0);
-                                    if (firstFace.getFaceRect() != null && faceHash != null) {
-                                        boolean shouldSend = faceTrackingService.trackUnknownFace(
-                                                cameraName,
-                                                firstFace.getFaceRect(),
-                                                faceHash
-                                        );
+                                if (firstFace.getFaceRect() == null) {
+                                    log.warn("⚠️ SKIPPED: faceRect is null for camera '{}'", cameraName);
+                                } else if (faceHash == null) {
+                                    log.warn("⚠️ SKIPPED: faceHash is null for camera '{}'", cameraName);
+                                } else {
+                                    log.info("📊 CALLING TRACKING SERVICE: camera='{}', person='{}'", cameraName, firstFace.getPersonName());
 
-                                        if (shouldSend) {
-                                            // Face has been tracked through multiple frames with movement
-                                            // Now check if we recently sent this unknown person
-                                            if (detectionHistoryService.shouldSendUnknownDetection(imageHash, detectedPeopleKey, cameraName, faceHash)) {
-                                                log.info("Sending tracked unknown person notification for camera '{}'", cameraName);
-                                                telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
-                                                // Mark as sent to prevent duplicates
-                                                detectionHistoryService.markUnknownDetectionAsSent(imageHash, detectedPeopleKey, cameraName, faceHash);
-                                            } else {
-                                                log.debug("Tracked unknown already sent recently for camera '{}', skipping", cameraName);
-                                            }
+                                    // Track face with current detection name and confidence score
+                                    FaceTrackingService.TrackingResult trackingResult = faceTrackingService.trackFace(
+                                            cameraName,
+                                            firstFace.getPersonName(), // Pass current detection name
+                                            firstFace.getFaceRect(),
+                                            faceHash,
+                                            firstFace.getConfidence(),
+                                            imageBytes // Pass current frame image bytes
+                                    );
+
+                                    log.info("📋 TRACKING RESULT: shouldSend={}, personName={}, score={}",
+                                        trackingResult.isShouldSend(),
+                                        trackingResult.getPersonName(),
+                                        trackingResult.isShouldSend() ? String.format("%.2f", trackingResult.getBestConfidenceScore()) : "N/A");
+
+                                    if (trackingResult.isShouldSend()) {
+                                        log.info("✅ VERDICT REACHED! Starting notification process...");
+                                        // Face has been tracked through multiple frames with movement
+                                        // Use the determined identity (most common) and best score
+                                        String determinedIdentity = trackingResult.getPersonName();
+                                        boolean isUnknown = "Unknown".equalsIgnoreCase(determinedIdentity);
+
+                                        log.info("🎯 IDENTITY: '{}', isUnknown={}", determinedIdentity, isUnknown);
+
+                                        // Create scores map with determined identity and best score
+                                        Map<String, Double> bestScores = Map.of(determinedIdentity, trackingResult.getBestConfidenceScore());
+
+                                        // Use the BEST frame's image bytes (not current frame)
+                                        byte[] bestImageBytes = trackingResult.getBestImageBytes();
+
+                                        log.info("📷 IMAGE DATA: bestImageBytes={} bytes",
+                                            (bestImageBytes != null ? bestImageBytes.length : 0));
+
+                                        if (bestImageBytes == null || bestImageBytes.length == 0) {
+                                            log.error("❌ BLOCKED: Best image bytes is null or empty for camera '{}'", cameraName);
                                         } else {
-                                            log.trace("Camera '{}': Still tracking unknown face, not ready to send yet", cameraName);
+                                            log.info("🔍 CHECKING DETECTION HISTORY...");
+
+                                            // Check if we recently sent this person (using appropriate method)
+                                            boolean shouldSend = isUnknown
+                                                    ? detectionHistoryService.shouldSendUnknownDetection(imageHash, determinedIdentity, cameraName, trackingResult.getBestFaceHash())
+                                                    : detectionHistoryService.shouldSendDetection(imageHash, determinedIdentity, cameraName, trackingResult.getBestFaceHash());
+
+                                            log.info("📊 COOLDOWN CHECK: shouldSend={}, isUnknown={}, identity='{}'",
+                                                shouldSend, isUnknown, determinedIdentity);
+
+                                            if (shouldSend) {
+                                                log.info("🚀 SENDING TO TELEGRAM: camera='{}', identity='{}', score={}, imageSize={} bytes",
+                                                    cameraName, determinedIdentity,
+                                                    String.format("%.2f", trackingResult.getBestConfidenceScore()),
+                                                    bestImageBytes.length);
+
+                                                try {
+                                                    // Send notification with BEST frame image and determined identity
+                                                    telegramPublisherService.publishDetection(bestImageBytes, bestScores, cameraName);
+
+                                                    log.info("✅ SUCCESS: Telegram notification sent for '{}'", determinedIdentity);
+
+                                                    // Mark as sent to prevent duplicates
+                                                    if (isUnknown) {
+                                                        detectionHistoryService.markUnknownDetectionAsSent(imageHash, determinedIdentity, cameraName, trackingResult.getBestFaceHash());
+                                                        log.debug("Marked unknown '{}' as sent", determinedIdentity);
+                                                    }
+                                                } catch (Exception telegramEx) {
+                                                    log.error("❌ TELEGRAM FAILED: {}", telegramEx.getMessage(), telegramEx);
+                                                }
+                                            } else {
+                                                log.info("⏭️ COOLDOWN: Skipping '{}' for camera '{}' (sent recently)", determinedIdentity, cameraName);
+                                            }
                                         }
+                                    } else {
+                                        log.debug("⏳ STILL TRACKING: camera='{}', not ready to send yet", cameraName);
                                     }
                                 }
                             } else {
-                                // Known person - cancel any similar unknown face tracks
-                                if (faceHash != null) {
-                                    faceTrackingService.cancelSimilarTracks(cameraName, faceHash);
-                                }
-
-                                // Check if we should send immediately
-                                if (detectionHistoryService.shouldSendDetection(imageHash, detectedPeopleKey, cameraName, faceHash)) {
-                                    // Publish to Telegram with detected people information
-                                    telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
-                                } else {
-                                    log.debug("Skipping duplicate detection for camera '{}' with people: {}", cameraName, detectedPeopleKey);
-                                }
+                                log.debug("📭 NO FACES: Skipping frame from camera '{}'", cameraName);
                             }
 
                             matUtil.releaseResources(finalImg);
                         } catch (Exception e) {
-                            log.error("Failed to publish detection to Telegram for camera '{}'", cameraName, e);
+                            log.error("Failed to publish detection to Telegram for camera '{}': {}", cameraName, e.getMessage(), e);
                         }
 
-                } catch (Exception e) {
-                    log.error("Error processing frame from camera '{}'", cameraName, e);
+                    } catch (Exception e) {
+                        log.error("Error processing frame from camera '{}': {}", cameraName, e.getMessage(), e);
                 } finally {
                     try {
                         Mat detectionImg = null;
@@ -274,9 +360,76 @@ public class RtspRecognitionRunner {
                         log.warn("Error releasing resources for camera '{}'", cameraName, releaseEx);
                     }
                 }
-            });
-        } catch (Exception e) {
-            log.error("Error starting stream extraction for camera '{}': {}", cameraName, e.getMessage(), e);
+                });
+
+                // If extract() returns normally, connection was lost
+                log.warn("Stream ended for camera '{}' - Connection may have been lost", cameraName);
+
+                // Reset connection notification flag so we can notify on successful reconnection
+                connectionNotified = false;
+
+                reconnectAttempt++;
+                consecutiveFailures++;
+
+            } catch (Exception e) {
+                connectionNotified = false; // Reset flag on error
+                reconnectAttempt++;
+                consecutiveFailures++;
+                log.error("Error with camera '{}' (attempt #{}): {}", cameraName, reconnectAttempt, e.getMessage());
+            }
+
+            // Check if we need to hibernate after 3 consecutive failures
+            if (consecutiveFailures >= HIBERNATE_AFTER_FAILURES) {
+                log.warn("Camera '{}': {} consecutive failures detected. Entering hibernate mode for {} minutes...",
+                    cameraName, HIBERNATE_AFTER_FAILURES, HIBERNATE_DURATION_MS / 60000);
+
+                // Send hibernate notification to Telegram
+                try {
+                    telegramPublisherService.sendTextMessage(
+                        String.format("😴 Camera '%s': Entering hibernate mode for 5 minutes after %d failed connection attempts. Will retry automatically.",
+                            cameraName, HIBERNATE_AFTER_FAILURES)
+                    );
+                } catch (Exception e) {
+                    log.warn("Failed to send hibernate notification to Telegram: {}", e.getMessage());
+                }
+
+                // Hibernate for 5 minutes
+                try {
+                    Thread.sleep(HIBERNATE_DURATION_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.error("Camera '{}' hibernate interrupted", cameraName);
+                    return;
+                }
+
+                // Send wake-up notification
+                try {
+                    telegramPublisherService.sendTextMessage(
+                        String.format("⏰ Camera '%s': Hibernate complete. Resuming connection attempts...",
+                            cameraName)
+                    );
+                } catch (Exception e) {
+                    log.warn("Failed to send wake-up notification to Telegram: {}", e.getMessage());
+                }
+
+                log.info("Camera '{}': Hibernate complete. Resuming connection attempts...", cameraName);
+
+                // Reset consecutive failures counter after hibernate
+                consecutiveFailures = 0;
+
+            } else {
+                // Normal exponential backoff (2s, 4s, 8s, 16s, max 30s)
+                long delayMs = Math.min(30000, 2000 * (long) Math.pow(2, Math.min(reconnectAttempt - 1, 4)));
+                log.info("Waiting {}ms before reconnecting camera '{}'...", delayMs, cameraName);
+
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.error("Camera '{}' reconnection interrupted", cameraName);
+                    return;
+                }
+            }
         }
     }
 

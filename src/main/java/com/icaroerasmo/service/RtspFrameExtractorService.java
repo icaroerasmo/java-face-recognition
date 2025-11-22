@@ -191,7 +191,7 @@ public class RtspFrameExtractorService {
     private void processFrames(FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
                               String rtspUrl, Consumer<Mat> consumer) throws Exception {
         int nullFrameCount = 0;
-        int maxNullFrames = 150;
+        int maxNullFrames = 150; // ~5 seconds at 30fps
 
         try {
             while (true) {
@@ -202,14 +202,14 @@ public class RtspFrameExtractorService {
                     if (frame == null) {
                         nullFrameCount++;
                         if (nullFrameCount > maxNullFrames) {
-                            log.warn("Exceeded maximum null frames ({}) for stream: {}", maxNullFrames, rtspUrl);
-                            break;
+                            log.warn("Connection lost for stream (exceeded {} null frames): {}", maxNullFrames, rtspUrl);
+                            throw new RuntimeException("Stream connection lost - too many null frames");
                         }
                         Thread.sleep(10);
                         continue;
                     }
 
-                    nullFrameCount = 0;
+                    nullFrameCount = 0; // Reset counter on successful frame
 
                     if (frame.image != null) {
                         // Basic dimension validation

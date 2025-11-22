@@ -4,6 +4,7 @@ package com.icaroerasmo.service;
 import com.icaroerasmo.properties.TelegramProperties;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.model.request.ParseMode;
+import com.pengrad.telegrambot.request.SendMessage;
 import com.pengrad.telegrambot.request.SendPhoto;
 import com.pengrad.telegrambot.response.SendResponse;
 import lombok.RequiredArgsConstructor;
@@ -28,13 +29,23 @@ public class TelegramPublisherService {
     public void publishDetection(byte[] imageBytes, Map<String, Double> detectedPeopleWithScores, String cameraName) {
 
         try {
+            log.info("publishDetection called: cameraName={}, imageBytes={}, detectedPeople={}",
+                cameraName, (imageBytes != null ? imageBytes.length : 0), detectedPeopleWithScores.keySet());
+
             if (telegramBot == null) {
-                log.error("FATAL: Telegram bot is not initialized. Application will terminate.");
-                System.exit(1);
+                log.error("FATAL: Telegram bot is not initialized!");
+                throw new RuntimeException("Telegram bot is not initialized");
+            }
+
+            if (imageBytes == null || imageBytes.length == 0) {
+                log.error("FATAL: Image bytes is null or empty!");
+                throw new RuntimeException("Image bytes is null or empty");
             }
 
             // Build caption with detected people info
             String caption = buildCaption(detectedPeopleWithScores, cameraName);
+
+            log.info("Sending photo to Telegram: chatId={}, caption={}", telegramProperties.getChatId(), caption);
 
             // Send image to Telegram
             SendPhoto sendPhoto = new SendPhoto(telegramProperties.getChatId(), imageBytes)
@@ -44,16 +55,16 @@ public class TelegramPublisherService {
             SendResponse response = telegramBot.execute(sendPhoto);
 
             if (response.isOk()) {
-                log.info("Successfully sent detection image to Telegram for camera '{}'. Caption: {}", cameraName, caption);
+                log.info("✅ Successfully sent detection image to Telegram for camera '{}'. Caption: {}", cameraName, caption);
             } else {
-                String errorMsg = "Failed to send image to Telegram: " + response.description();
+                String errorMsg = "Failed to send image to Telegram: " + response.description() + " (error code: " + response.errorCode() + ")";
                 log.error(errorMsg);
                 throw new RuntimeException(errorMsg);
             }
 
         } catch (Exception e) {
-            log.error("FATAL: Failed to publish detection to Telegram. Application will terminate.", e);
-            System.exit(1);
+            log.error("❌ Failed to publish detection to Telegram: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to publish detection to Telegram", e);
         }
     }
 
@@ -82,5 +93,29 @@ public class TelegramPublisherService {
         caption.append("\nTime: ").append(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
 
         return caption.toString();
+    }
+
+    /**
+     * Sends a text message to Telegram (for status notifications)
+     */
+    public void sendTextMessage(String message) {
+        try {
+            if (telegramBot == null) {
+                log.error("Telegram bot is not initialized. Cannot send message: {}", message);
+                return;
+            }
+
+            SendMessage sendMessage = new SendMessage(telegramProperties.getChatId(), message);
+            SendResponse response = telegramBot.execute(sendMessage);
+
+            if (response.isOk()) {
+                log.debug("Successfully sent text message to Telegram: {}", message);
+            } else {
+                log.warn("Failed to send text message to Telegram: {}", response.description());
+            }
+
+        } catch (Exception e) {
+            log.warn("Error sending text message to Telegram: {}", e.getMessage());
+        }
     }
 }

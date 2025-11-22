@@ -22,8 +22,9 @@ public class FaceTrackingService {
     // Track unknown faces per camera
     private final Map<String, List<TrackedFace>> trackedFaces = new ConcurrentHashMap<>();
 
-    // Minimum number of frames to track before sending notification (reduced from 5 to 3)
-    private static final int MIN_TRACKING_FRAMES = 3;
+    // Minimum number of frames to track before sending notification
+    // Requires 5 detections of same person before sending to Telegram
+    private static final int MIN_TRACKING_FRAMES = 5;
 
     // Maximum time to track a face (10 seconds)
     private static final long MAX_TRACKING_TIME_MS = 10 * 1000;
@@ -31,8 +32,11 @@ public class FaceTrackingService {
     // Maximum distance between face positions to consider it the same face (pixels)
     private static final double MAX_POSITION_DISTANCE = 150.0;
 
-    // Face similarity threshold for tracking (more lenient than detection)
-    private static final int TRACKING_SIMILARITY_THRESHOLD = 25;
+    // Face similarity threshold for tracking (extremely lenient)
+    // Higher value = more lenient matching (allows more hash differences)
+    // Set to 150 to allow almost any variation (hash check barely filters)
+    // Only blocks if faces are COMPLETELY different (>150% difference)
+    private static final int TRACKING_SIMILARITY_THRESHOLD = 150;
 
     // Minimum tracking duration before sending (1 second instead of 2)
     private static final long MIN_TRACKING_DURATION_MS = 1000;
@@ -44,17 +48,41 @@ public class FaceTrackingService {
     private static final long TRACK_TIMEOUT_MS = 5000;
 
     /**
-     * Track an unknown face detection
-     * Returns true if the face has been tracked long enough to send notification
+     * Result of tracking containing best frame information and determined identity
+     */
+    @Data
+    public static class TrackingResult {
+        private final boolean shouldSend;
+        private final String personName; // Determined identity (most common across frames)
+        private final Rect bestRect;
+        private final byte[] bestFaceHash;
+        private final double bestConfidenceScore;
+        private final byte[] bestImageBytes; // Image bytes of the best frame
+
+        public static TrackingResult notReady() {
+            return new TrackingResult(false, null, null, null, 0.0, null);
+        }
+
+        public static TrackingResult ready(String personName, Rect rect, byte[] faceHash, double score, byte[] imageBytes) {
+            return new TrackingResult(true, personName, rect, faceHash, score, imageBytes);
+        }
+    }
+
+    /**
+     * Track a face detection (can be known or unknown)
+     * Returns TrackingResult with most common identity and best frame if ready to send notification
      *
      * @param cameraName Name of the camera
+     * @param personName Detected person name (or "Unknown")
      * @param faceRect Rectangle of the detected face
      * @param faceHash Hash of the face image for similarity comparison
-     * @return true if should send notification, false if still tracking
+     * @param confidenceScore Recognition confidence score (lower is better)
+     * @param imageBytes Image bytes of the current frame
+     * @return TrackingResult indicating if should send, determined identity, and best frame data
      */
-    public boolean trackUnknownFace(String cameraName, Rect faceRect, byte[] faceHash) {
-        if (faceRect == null || faceHash == null) {
-            return false; // Can't track without face data
+    public TrackingResult trackFace(String cameraName, String personName, Rect faceRect, byte[] faceHash, double confidenceScore, byte[] imageBytes) {
+        if (faceRect == null || faceHash == null || imageBytes == null) {
+            return TrackingResult.notReady(); // Can't track without face data
         }
 
         long now = System.currentTimeMillis();
@@ -66,27 +94,39 @@ public class FaceTrackingService {
         if (matchedTrack != null) {
             // Update existing track - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            matchedTrack.addObservation(clonedRect, faceHash, now);
+            matchedTrack.addObservation(clonedRect, faceHash, now, confidenceScore, personName, imageBytes);
 
             long trackingDuration = now - matchedTrack.firstSeen;
             int frameCount = matchedTrack.observations.size();
 
-            log.debug("Camera '{}': Tracking unknown face - {} frames over {}ms (distance moved: {}px)",
-                    cameraName, frameCount, trackingDuration, (int)matchedTrack.getTotalDistanceMoved());
+            log.debug("Camera '{}': Tracking face - {} frames over {}ms (distance moved: {}px, best score: {}, current: {})",
+                    cameraName, frameCount, trackingDuration, (int)matchedTrack.getTotalDistanceMoved(),
+                    String.format("%.2f", matchedTrack.getBestConfidenceScore()), personName);
 
             // Check if we've tracked long enough
             if (frameCount >= MIN_TRACKING_FRAMES && trackingDuration >= MIN_TRACKING_DURATION_MS) {
                 // Check if face is actually moving (not static)
                 double distanceMoved = matchedTrack.getTotalDistanceMoved();
                 if (distanceMoved > MIN_MOVEMENT_PIXELS) {
-                    log.info("Camera '{}': Unknown face tracked through {} frames over {}ms, moved {}px - sending notification",
-                            cameraName, frameCount, trackingDuration, (int)distanceMoved);
+                    // Determine the most common identity
+                    String determinedIdentity = matchedTrack.getMostCommonIdentity();
+
+                    log.info("Camera '{}': Face tracked through {} frames over {}ms, moved {}px, determined identity: '{}', best score: {} - sending notification",
+                            cameraName, frameCount, trackingDuration, (int)distanceMoved, determinedIdentity,
+                            String.format("%.2f", matchedTrack.getBestConfidenceScore()));
+
+                    // Get best frame data before cleanup
+                    Rect bestRect = matchedTrack.getBestRect();
+                    byte[] bestFaceHash = matchedTrack.getBestFaceHash();
+                    double bestScore = matchedTrack.getBestConfidenceScore();
+                    byte[] bestImageBytes = matchedTrack.getBestImageBytes();
+
                     // Remove from tracking and cleanup resources
                     cameraTrackedFaces.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return true;
+                    return TrackingResult.ready(determinedIdentity, bestRect, bestFaceHash, bestScore, bestImageBytes);
                 } else {
-                    log.debug("Camera '{}': Unknown face appears static (moved only {}px) - continuing to track",
+                    log.debug("Camera '{}': Face appears static (moved only {}px) - continuing to track",
                             cameraName, (int)distanceMoved);
                 }
             }
@@ -95,29 +135,39 @@ public class FaceTrackingService {
             if (trackingDuration > MAX_TRACKING_TIME_MS) {
                 double distanceMoved = matchedTrack.getTotalDistanceMoved();
                 if (distanceMoved < MIN_MOVEMENT_PIXELS) {
-                    log.warn("Camera '{}': Unknown face tracked for {}ms but barely moved ({}px) - likely detection artifact, discarding",
+                    log.warn("Camera '{}': Face tracked for {}ms but barely moved ({}px) - likely detection artifact, discarding",
                             cameraName, trackingDuration, (int)distanceMoved);
                     cameraTrackedFaces.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return false; // Don't send - likely false positive
+                    return TrackingResult.notReady(); // Don't send - likely false positive
                 } else {
-                    log.info("Camera '{}': Unknown face tracking expired after {}ms, moved {}px - sending notification",
-                            cameraName, trackingDuration, (int)distanceMoved);
+                    // Determine the most common identity
+                    String determinedIdentity = matchedTrack.getMostCommonIdentity();
+
+                    log.info("Camera '{}': Face tracking expired after {}ms, moved {}px, determined identity: '{}', best score: {} - sending notification",
+                            cameraName, trackingDuration, (int)distanceMoved, determinedIdentity,
+                            String.format("%.2f", matchedTrack.getBestConfidenceScore()));
+
+                    // Get best frame data before cleanup
+                    Rect bestRect = matchedTrack.getBestRect();
+                    byte[] bestFaceHash = matchedTrack.getBestFaceHash();
+                    double bestScore = matchedTrack.getBestConfidenceScore();
+                    byte[] bestImageBytes = matchedTrack.getBestImageBytes();
                     cameraTrackedFaces.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return true;
+                    return TrackingResult.ready(determinedIdentity, bestRect, bestFaceHash, bestScore, bestImageBytes);
                 }
             }
 
-            return false; // Still tracking
+            return TrackingResult.notReady(); // Still tracking
         } else {
             // New face, start tracking - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            TrackedFace newTrack = new TrackedFace(clonedRect, faceHash, now);
+            TrackedFace newTrack = new TrackedFace(clonedRect, faceHash, now, confidenceScore, personName, imageBytes);
             cameraTrackedFaces.add(newTrack);
-            log.debug("Camera '{}': Started tracking new unknown face at position ({}, {})",
-                    cameraName, faceRect.x(), faceRect.y());
-            return false; // Just started tracking
+            log.debug("Camera '{}': Started tracking new face '{}' at position ({}, {}) with score {}",
+                    cameraName, personName, faceRect.x(), faceRect.y(), String.format("%.2f", confidenceScore));
+            return TrackingResult.notReady(); // Just started tracking
         }
     }
 
@@ -151,25 +201,43 @@ public class FaceTrackingService {
      * Find a tracked face that matches the current detection
      */
     private TrackedFace findMatchingTrackedFace(List<TrackedFace> tracks, Rect faceRect, byte[] faceHash, long currentTime) {
+        log.debug("🔍 MATCHING: Checking {} existing tracks for face at ({}, {})", tracks.size(), faceRect.x(), faceRect.y());
+
         for (TrackedFace track : tracks) {
+            Rect lastRect = track.getLatestRect();
+            long timeSinceLastSeen = currentTime - track.lastSeen;
+
             // Check if track is still recent (allow 5 second gaps instead of 2)
-            if (currentTime - track.lastSeen > TRACK_TIMEOUT_MS) {
+            if (timeSinceLastSeen > TRACK_TIMEOUT_MS) {
+                log.debug("❌ Track at ({}, {}) is too old: {}ms > {}ms",
+                    lastRect.x(), lastRect.y(), timeSinceLastSeen, TRACK_TIMEOUT_MS);
                 continue; // Track is too old
             }
 
             // Check position distance
-            Rect lastRect = track.getLatestRect();
             double distance = calculateDistance(faceRect, lastRect);
             if (distance > MAX_POSITION_DISTANCE) {
+                log.debug("❌ Track at ({}, {}) is too far: {}px > {}px",
+                    lastRect.x(), lastRect.y(), (int)distance, (int)MAX_POSITION_DISTANCE);
                 continue; // Face moved too far
             }
 
-            // Check face similarity
+            // Check face hash similarity (reactivated with high threshold)
             int similarity = computeFaceHashSimilarity(faceHash, track.getLatestFaceHash());
+            log.debug("📊 Track at ({}, {}) similarity: {} (threshold: {}), distance: {}px, age: {}ms",
+                lastRect.x(), lastRect.y(), similarity, TRACKING_SIMILARITY_THRESHOLD,
+                (int)distance, timeSinceLastSeen);
+
             if (similarity <= TRACKING_SIMILARITY_THRESHOLD) {
+                log.info("✅ MATCHED: Face at ({}, {}) matched to existing track (similarity: {}, distance: {}px)",
+                    faceRect.x(), faceRect.y(), similarity, (int)distance);
                 return track;
+            } else {
+                log.debug("❌ Similarity too high: {} > {} - faces too different", similarity, TRACKING_SIMILARITY_THRESHOLD);
             }
         }
+
+        log.debug("🆕 NO MATCH: Creating new track for face at ({}, {})", faceRect.x(), faceRect.y());
         return null;
     }
 
@@ -237,16 +305,25 @@ public class FaceTrackingService {
         private final long firstSeen;
         private long lastSeen;
         private final List<FaceObservation> observations = new ArrayList<>();
+        private FaceObservation bestObservation; // Track the best scoring observation
 
-        public TrackedFace(Rect initialRect, byte[] initialFaceHash, long timestamp) {
+        public TrackedFace(Rect initialRect, byte[] initialFaceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes) {
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
-            this.observations.add(new FaceObservation(initialRect, initialFaceHash, timestamp));
+            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, confidenceScore, personName, imageBytes);
+            this.observations.add(observation);
+            this.bestObservation = observation; // First is best by default
         }
 
-        public void addObservation(Rect rect, byte[] faceHash, long timestamp) {
+        public void addObservation(Rect rect, byte[] faceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes) {
             this.lastSeen = timestamp;
-            this.observations.add(new FaceObservation(rect, faceHash, timestamp));
+            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, confidenceScore, personName, imageBytes);
+            this.observations.add(observation);
+
+            // Update best observation if this one has lower confidence (better match)
+            if (bestObservation == null || confidenceScore < bestObservation.confidenceScore) {
+                bestObservation = observation;
+            }
         }
 
         public Rect getLatestRect() {
@@ -255,6 +332,61 @@ public class FaceTrackingService {
 
         public byte[] getLatestFaceHash() {
             return observations.get(observations.size() - 1).faceHash;
+        }
+
+        public Rect getBestRect() {
+            return bestObservation != null ? bestObservation.rect : getLatestRect();
+        }
+
+        public byte[] getBestFaceHash() {
+            return bestObservation != null ? bestObservation.faceHash : getLatestFaceHash();
+        }
+
+        public double getBestConfidenceScore() {
+            return bestObservation != null ? bestObservation.confidenceScore : 100.0;
+        }
+
+        public byte[] getBestImageBytes() {
+            return bestObservation != null ? bestObservation.imageBytes : null;
+        }
+
+        /**
+         * Determine the most common identity across all observations
+         * @return The person name that appears most frequently (or "Unknown" if tied/most common)
+         */
+        public String getMostCommonIdentity() {
+            Map<String, Integer> identityCounts = new java.util.HashMap<>();
+
+            // Count occurrences of each identity
+            for (FaceObservation obs : observations) {
+                String name = obs.personName != null ? obs.personName : "Unknown";
+                identityCounts.put(name, identityCounts.getOrDefault(name, 0) + 1);
+            }
+
+            // Find the most common identity
+            String mostCommon = "Unknown";
+            int maxCount = 0;
+            int unknownCount = identityCounts.getOrDefault("Unknown", 0);
+
+            for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
+                if (entry.getValue() > maxCount) {
+                    maxCount = entry.getValue();
+                    mostCommon = entry.getKey();
+                }
+            }
+
+            // If Unknown appears at least as much as the winner, prefer Unknown
+            // This is conservative - only identify as known if clearly dominant
+            if (!mostCommon.equals("Unknown") && unknownCount >= maxCount * 0.4) {
+                log.debug("Identity uncertain: '{}' ({} times) vs Unknown ({} times) - reporting as Unknown",
+                    mostCommon, maxCount, unknownCount);
+                return "Unknown";
+            }
+
+            log.debug("Determined identity: '{}' appeared {} times out of {} observations",
+                mostCommon, maxCount, observations.size());
+
+            return mostCommon;
         }
 
         /**
@@ -304,5 +436,8 @@ public class FaceTrackingService {
         private final Rect rect;
         private final byte[] faceHash;
         private final long timestamp;
+        private final double confidenceScore; // Lower is better
+        private final String personName; // Detected identity for this frame
+        private final byte[] imageBytes; // Frame image for this observation
     }
 }
