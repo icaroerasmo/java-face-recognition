@@ -7,6 +7,7 @@ import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionHistoryService;
 import com.icaroerasmo.service.FaceRecognitionService;
 import com.icaroerasmo.service.FaceRecognizerHolder;
+import com.icaroerasmo.service.FaceTrackingService;
 import com.icaroerasmo.service.TelegramPublisherService;
 import com.icaroerasmo.service.RtspFrameExtractorService;
 import com.icaroerasmo.utils.MatUtil;
@@ -26,7 +27,6 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 
@@ -35,14 +35,13 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class RtspRecognitionRunner {
 
-    private static final AtomicInteger COUNT = new AtomicInteger(0);
-
     private final FaceRecognitionService faceRecognitionService;
     private final FaceRecognizerHolder faceRecognizerHolder;
     private final RtspFrameExtractorService rtspFrameExtractorService;
     private final MatUtil matUtil;
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
+    private final FaceTrackingService faceTrackingService;
     private final StreamsProperties streamsProperties;
     private final TrainingProperties trainingProperties;
 
@@ -215,14 +214,40 @@ public class RtspRecognitionRunner {
                             boolean isUnknown = detectedPeopleKey.contains("Unknown");
 
                             if (isUnknown) {
-                                // Queue unknown detection - wait 3 seconds to see if person gets recognized
-                                String queuedKey = detectionHistoryService.queueUnknownDetection(
-                                        imageHash, detectedPeopleKey, cameraName, imageBytes, detectedPeopleWithScores, faceHash);
-                                if (queuedKey != null) {
-                                    log.debug("Unknown detection queued for camera '{}' with key: {}", cameraName, queuedKey);
+                                // Use face tracking for unknown persons
+                                // Track the face across multiple frames to see if it's moving
+                                if (!faces.isEmpty()) {
+                                    FaceRecognition.DetectedFaces firstFace = faces.get(0);
+                                    if (firstFace.getFaceRect() != null && faceHash != null) {
+                                        boolean shouldSend = faceTrackingService.trackUnknownFace(
+                                                cameraName,
+                                                firstFace.getFaceRect(),
+                                                faceHash
+                                        );
+
+                                        if (shouldSend) {
+                                            // Face has been tracked through multiple frames with movement
+                                            // Now check if we recently sent this unknown person
+                                            if (detectionHistoryService.shouldSendUnknownDetection(imageHash, detectedPeopleKey, cameraName, faceHash)) {
+                                                log.info("Sending tracked unknown person notification for camera '{}'", cameraName);
+                                                telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);
+                                                // Mark as sent to prevent duplicates
+                                                detectionHistoryService.markUnknownDetectionAsSent(imageHash, detectedPeopleKey, cameraName, faceHash);
+                                            } else {
+                                                log.debug("Tracked unknown already sent recently for camera '{}', skipping", cameraName);
+                                            }
+                                        } else {
+                                            log.trace("Camera '{}': Still tracking unknown face, not ready to send yet", cameraName);
+                                        }
+                                    }
                                 }
                             } else {
-                                // Known person - check if we should send immediately
+                                // Known person - cancel any similar unknown face tracks
+                                if (faceHash != null) {
+                                    faceTrackingService.cancelSimilarTracks(cameraName, faceHash);
+                                }
+
+                                // Check if we should send immediately
                                 if (detectionHistoryService.shouldSendDetection(imageHash, detectedPeopleKey, cameraName, faceHash)) {
                                     // Publish to Telegram with detected people information
                                     telegramPublisherService.publishDetection(imageBytes, detectedPeopleWithScores, cameraName);

@@ -4,7 +4,7 @@ import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionHistoryService;
 import com.icaroerasmo.service.FaceRecognitionService;
 import com.icaroerasmo.service.FaceRecognizerHolder;
-import com.icaroerasmo.service.TelegramPublisherService;
+import com.icaroerasmo.service.FaceTrackingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
@@ -14,7 +14,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.util.Map;
 
 /**
  * Scheduled tasks for application maintenance
@@ -29,56 +28,17 @@ public class ScheduledTasks {
     private final FaceRecognitionService faceRecognitionService;
     private final FaceRecognizerHolder faceRecognizerHolder;
     private final TrainingProperties trainingProperties;
-    private final TelegramPublisherService telegramPublisherService;
+    private final FaceTrackingService faceTrackingService;
 
     /**
-     * Process pending unknown detections every second
-     * This checks if any unknown detections have waited long enough (3 seconds)
-     * and sends them to Telegram if they haven't been matched with known persons
-     */
-    @Scheduled(fixedRate = 1000) // Every 1 second
-    public void processPendingUnknownDetections() {
-        try {
-            Map<String, DetectionHistoryService.PendingUnknownDetection> readyDetections =
-                    detectionHistoryService.getReadyUnknownDetections();
-
-            for (Map.Entry<String, DetectionHistoryService.PendingUnknownDetection> entry : readyDetections.entrySet()) {
-                DetectionHistoryService.PendingUnknownDetection pending = entry.getValue();
-                try {
-                    log.info("Sending pending unknown detection for camera '{}'", pending.cameraName);
-
-                    // Send to Telegram
-                    telegramPublisherService.publishDetection(
-                            pending.imageBytes,
-                            pending.detectedPeopleWithScores,
-                            pending.cameraName
-                    );
-
-                    // Mark this unknown detection as sent to prevent duplicates
-                    detectionHistoryService.markUnknownDetectionAsSent(
-                            pending.imageHash,
-                            pending.detectedPeopleKey,
-                            pending.cameraName,
-                            pending.faceHash
-                    );
-
-                } catch (Exception e) {
-                    log.error("Failed to send pending unknown detection for camera '{}'", pending.cameraName, e);
-                }
-            }
-        } catch (Exception e) {
-            log.error("Error processing pending unknown detections", e);
-        }
-    }
-
-    /**
-     * Cleanup old detection records every 10 minutes
+     * Cleanup old detection records and face tracks every 10 minutes
      * This prevents memory leaks from accumulating detection history
      */
     @Scheduled(fixedRate = 10 * 60 * 1000) // 10 minutes
     public void cleanupDetectionHistory() {
-        log.debug("Running scheduled cleanup of detection history");
+        log.debug("Running scheduled cleanup of detection history and face tracks");
         detectionHistoryService.cleanupOldRecords();
+        faceTrackingService.cleanupOldTracks();
     }
 
     /**
