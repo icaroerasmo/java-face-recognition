@@ -9,6 +9,11 @@ import org.bytedeco.javacv.OpenCVFrameConverter;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.springframework.stereotype.Service;
 
+import java.nio.ByteBuffer;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_PANIC;
@@ -17,6 +22,34 @@ import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 @Log4j2
 @Service
 public class RtspFrameExtractorService {
+
+    // Frame queue capacity - 30 frames = 1 second buffer at 30fps
+    private static final int FRAME_QUEUE_CAPACITY = 30;
+
+    // Poison pill to signal consumer thread to stop
+    private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
+
+    /**
+     * Frame data stored as byte array to prevent native memory leaks
+     * Each camera has its own queue of FrameData objects
+     */
+    private static class FrameData {
+        final byte[] data;
+        final int width;
+        final int height;
+        final int channels;
+
+        FrameData(byte[] data, int width, int height, int channels) {
+            this.data = data;
+            this.width = width;
+            this.height = height;
+            this.channels = channels;
+        }
+
+        boolean isPoisonPill() {
+            return data == null;
+        }
+    }
 
     /**
      * Extract frames from RTSP stream with configurable transport protocol
@@ -49,8 +82,8 @@ public class RtspFrameExtractorService {
                 grabber.start();
                 log.info("Successfully started RTSP grabber with 30 FPS and optimized buffering for: {}", rtspUrl);
 
-                // If we got here, connection succeeded - process frames
-                processFrames(grabber, converter, rtspUrl, consumer);
+                // Process frames using producer-consumer pattern with byte array storage
+                processFramesWithQueue(grabber, converter, rtspUrl, consumer);
 
                 // Normal exit
                 return;
@@ -186,75 +219,195 @@ public class RtspFrameExtractorService {
     }
 
     /**
-     * Process frames from an already-connected grabber
+     * Process frames using producer-consumer pattern with byte array storage
+     * Producer thread: Grabs frames and stores as byte arrays in queue
+     * Consumer thread: Takes byte arrays, reconstructs Mats, and processes them
      */
-    private void processFrames(FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
-                              String rtspUrl, Consumer<Mat> consumer) throws Exception {
-        int nullFrameCount = 0;
-        int maxNullFrames = 150; // ~5 seconds at 30fps
+    private void processFramesWithQueue(FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
+                                       String rtspUrl, Consumer<Mat> consumer) throws Exception {
+        // Create bounded queue - one per camera stream
+        BlockingQueue<FrameData> frameQueue = new LinkedBlockingQueue<>(FRAME_QUEUE_CAPACITY);
+        AtomicBoolean shouldStop = new AtomicBoolean(false);
+        AtomicBoolean producerError = new AtomicBoolean(false);
 
-        try {
-            while (true) {
-                Frame frame = null;
-                try {
-                    frame = grabber.grab();
+        // PRODUCER THREAD: Grabs frames and converts to byte arrays
+        Thread producer = new Thread(() -> {
+            int nullFrameCount = 0;
+            int maxNullFrames = 150;
 
-                    if (frame == null) {
-                        nullFrameCount++;
-                        if (nullFrameCount > maxNullFrames) {
-                            log.warn("Connection lost for stream (exceeded {} null frames): {}", maxNullFrames, rtspUrl);
-                            throw new RuntimeException("Stream connection lost - too many null frames");
+            try {
+                log.info("Frame producer started for: {}", rtspUrl);
+
+                while (!shouldStop.get() && !Thread.currentThread().isInterrupted()) {
+                    Frame frame = null;
+                    Mat mat = null;
+
+                    try {
+                        frame = grabber.grab();
+
+                        if (frame == null) {
+                            nullFrameCount++;
+                            if (nullFrameCount > maxNullFrames) {
+                                log.warn("Too many null frames ({}), stopping stream: {}", maxNullFrames, rtspUrl);
+                                producerError.set(true);
+                                shouldStop.set(true);
+                                break;
+                            }
+                            Thread.sleep(10);
+                            continue;
                         }
-                        Thread.sleep(10);
+
+                        nullFrameCount = 0;
+
+                        if (frame.image == null || frame.imageWidth <= 0 || frame.imageHeight <= 0) {
+                            continue;
+                        }
+
+                        // Convert Frame to Mat
+                        mat = converter.convert(frame);
+                        if (mat == null || mat.empty()) {
+                            continue;
+                        }
+
+                        // Validate Mat
+                        if (mat.cols() <= 0 || mat.rows() <= 0 || mat.data() == null || mat.data().isNull()) {
+                            try { mat.release(); } catch (Exception ignore) {}
+                            continue;
+                        }
+
+                        // Skip grey/blank frames
+                        if (isGreyFrame(mat)) {
+                            try { mat.release(); } catch (Exception ignore) {}
+                            continue;
+                        }
+
+                        // Convert Mat to byte array - THIS PREVENTS MEMORY LEAKS
+                        int width = mat.cols();
+                        int height = mat.rows();
+                        int channels = mat.channels();
+                        int totalBytes = width * height * channels;
+
+                        byte[] frameBytes = new byte[totalBytes];
+
+                        // Get buffer and ensure it's positioned correctly
+                        ByteBuffer buffer = mat.data().capacity(totalBytes).asByteBuffer();
+                        buffer.position(0);
+                        buffer.limit(totalBytes);
+                        buffer.get(frameBytes, 0, totalBytes);
+
+                        // Release Mat immediately after copying to byte array
+                        try { mat.release(); } catch (Exception ignore) {}
+                        mat = null;
+
+                        // Store byte array in queue
+                        FrameData frameData = new FrameData(frameBytes, width, height, channels);
+                        boolean added = frameQueue.offer(frameData, 1, TimeUnit.SECONDS);
+
+                        if (!added) {
+                            log.debug("Frame queue full, dropping frame for: {}", rtspUrl);
+                        }
+
+                    } catch (Exception e) {
+                        log.error("Error in producer for {}: {}", rtspUrl, e.getMessage(), e);
+                        if (mat != null) {
+                            try { mat.release(); } catch (Exception ignore) {}
+                        }
+                    } finally {
+                        if (frame != null) {
+                            try { frame.close(); } catch (Exception ignore) {}
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Producer thread error for {}: {}", rtspUrl, e.getMessage(), e);
+                producerError.set(true);
+            } finally {
+                try {
+                    frameQueue.offer(POISON_PILL, 1, TimeUnit.SECONDS);
+                } catch (Exception ignore) {}
+                log.info("Frame producer stopped for: {}", rtspUrl);
+            }
+        }, "FrameProducer-" + rtspUrl.hashCode());
+
+        // CONSUMER THREAD: Takes byte arrays and reconstructs Mats
+        Thread consumerThread = new Thread(() -> {
+            try {
+                log.info("Frame consumer started for: {}", rtspUrl);
+
+                while (!shouldStop.get() && !Thread.currentThread().isInterrupted()) {
+                    FrameData frameData = frameQueue.poll(1, TimeUnit.SECONDS);
+
+                    if (frameData == null) {
                         continue;
                     }
 
-                    nullFrameCount = 0; // Reset counter on successful frame
-
-                    if (frame.image != null) {
-                        // Basic dimension validation
-                        if (frame.imageWidth <= 0 || frame.imageHeight <= 0) {
-                            log.debug("Invalid frame dimensions: {}x{}", frame.imageWidth, frame.imageHeight);
-                            continue;
-                        }
-
-                        Mat nativeMat = converter.convert(frame);
-                        if (nativeMat == null || nativeMat.empty()) {
-                            log.debug("Failed to convert frame to Mat");
-                            continue;
-                        }
-
-                        Mat img = nativeMat.clone();
-
-                        try { nativeMat.release(); } catch (Exception ignore) {}
-
-                        // Validate cloned image
-                        if (img.empty() || img.cols() <= 0 || img.rows() <= 0) {
-                            log.debug("Cloned image is empty or has invalid dimensions");
-                            try { img.release(); } catch (Exception ignore) {}
-                            continue;
-                        }
-
-
-                        // Skip grey/blank frames
-                        if (isGreyFrame(img)) {
-                            try { img.release(); } catch (Exception ignore) {}
-                            continue;
-                        }
-
-                        consumer.accept(img);
+                    if (frameData.isPoisonPill()) {
+                        log.info("Received stop signal for: {}", rtspUrl);
+                        break;
                     }
-                } finally {
-                    if (frame != null) {
-                        try { frame.close(); } catch (Exception ignore) {}
+
+                    Mat mat = null;
+                    try {
+                        // Reconstruct Mat from byte array
+                        mat = new Mat(frameData.height, frameData.width, org.bytedeco.opencv.global.opencv_core.CV_8UC3);
+
+                        // Ensure the Mat has the correct size
+                        int expectedSize = frameData.width * frameData.height * frameData.channels;
+                        if (frameData.data.length != expectedSize) {
+                            log.warn("Frame data size mismatch: expected {}, got {}", expectedSize, frameData.data.length);
+                            continue;
+                        }
+
+                        // Copy byte array to Mat
+                        ByteBuffer buffer = mat.data().capacity(expectedSize).asByteBuffer();
+                        buffer.position(0);
+                        buffer.put(frameData.data);
+
+                        // Pass to callback for processing
+                        consumer.accept(mat);
+
+                    } catch (Exception e) {
+                        log.error("Error in consumer for {}: {}", rtspUrl, e.getMessage(), e);
+                    } finally {
+                        // Consumer thread releases the Mat after callback completes
+                        if (mat != null) {
+                            try { mat.release(); } catch (Exception ignore) {}
+                        }
                     }
                 }
+            } catch (Exception e) {
+                log.error("Consumer thread error for {}: {}", rtspUrl, e.getMessage(), e);
+            } finally {
+                frameQueue.clear();
+                log.info("Frame consumer stopped for: {}", rtspUrl);
             }
+        }, "FrameConsumer-" + rtspUrl.hashCode());
+
+        // Start both threads
+        producer.start();
+        consumerThread.start();
+
+        try {
+            // Wait for both threads to complete
+            producer.join();
+            consumerThread.join();
+
+            if (producerError.get()) {
+                throw new RuntimeException("Stream connection lost");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            shouldStop.set(true);
+            producer.interrupt();
+            consumerThread.interrupt();
+            throw new RuntimeException("Frame processing interrupted", e);
         } finally {
-            log.info("Stream processing ended for URL: {}", rtspUrl);
+            // Close converter to release native resources
             try {
-                System.gc();
-            } catch (Exception ignore) {}
+                converter.close();
+            } catch (Exception e) {
+                log.warn("Error closing converter: {}", e.getMessage());
+            }
         }
     }
 
