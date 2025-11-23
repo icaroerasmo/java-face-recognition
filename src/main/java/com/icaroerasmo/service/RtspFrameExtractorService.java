@@ -24,7 +24,7 @@ import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 public class RtspFrameExtractorService {
 
     // Frame queue capacity - 30 frames = 1 second buffer at 30fps
-    private static final int FRAME_QUEUE_CAPACITY = 30;
+    private static final int FRAME_QUEUE_CAPACITY = 10;
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
@@ -179,7 +179,7 @@ public class RtspFrameExtractorService {
         // - Compressed (H.264): ~2-5MB per frame
         // - Buffer needs to hold multiple frames for smooth playback
         // - UDP needs larger buffer due to packet reordering
-        int bufferSize = isUdp ? 104857600 : 52428800;  // 100MB for UDP, 50MB for TCP
+        int bufferSize = 51200;
         grabber.setOption("buffer_size", String.valueOf(bufferSize));
 
         if (isUdp) {
