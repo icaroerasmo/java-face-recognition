@@ -24,7 +24,7 @@ import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 public class RtspFrameExtractorService {
 
     // Frame queue capacity - 30 frames = 1 second buffer at 30fps
-    private static final int FRAME_QUEUE_CAPACITY = 10;
+    private static final int FRAME_QUEUE_CAPACITY = 30;
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
