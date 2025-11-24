@@ -183,7 +183,7 @@ public class DeepLearningFaceDetectionService {
             for (int i = 0; i < output.size(3); i++) {
                 float confidence = srcIndexer.get(i, 2);
 
-                if (confidence > 0.6) {
+                if (confidence > 0.7) {
                     float f1 = srcIndexer.get(i, 3); // x1
                     float f2 = srcIndexer.get(i, 4); // y1
                     float f3 = srcIndexer.get(i, 5); // x2

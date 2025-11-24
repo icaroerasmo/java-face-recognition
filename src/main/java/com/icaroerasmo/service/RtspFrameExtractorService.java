@@ -1,6 +1,7 @@
 package com.icaroerasmo.service;
 
 import com.icaroerasmo.properties.CameraProperties;
+import com.icaroerasmo.utils.Constants;
 import lombok.SneakyThrows;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import static com.icaroerasmo.utils.Constants.FPS;
 import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_PANIC;
 import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 
@@ -24,7 +26,7 @@ import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 public class RtspFrameExtractorService {
 
     // Frame queue capacity - 30 frames = 1 second buffer at 30fps
-    private static final int FRAME_QUEUE_CAPACITY = 30;
+    private static final int FRAME_QUEUE_CAPACITY = FPS;
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
@@ -150,7 +152,7 @@ public class RtspFrameExtractorService {
         // Set format FIRST before any other options
         grabber.setFormat("rtsp");
 
-        grabber.setFrameRate(30);
+        grabber.setFrameRate(FPS);
 
         // Configure transport protocol (TCP or UDP) - must be set early
         String transport = transportProtocol != null
@@ -171,7 +173,7 @@ public class RtspFrameExtractorService {
         grabber.setOption("analyzeduration", "5000000");  // 5 seconds analysis
 
         // Frame rate
-        grabber.setFrameRate(30);
+        grabber.setFrameRate(FPS);
 
         // Buffer size calculation for 4K support
         // 4K frame (3840x2160) at 30fps with H.264:

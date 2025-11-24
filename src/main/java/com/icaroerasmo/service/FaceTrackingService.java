@@ -1,5 +1,6 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.utils.Constants;
 import lombok.Data;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.Rect;
@@ -51,8 +52,8 @@ public class FaceTrackingService {
     }
 
     // Minimum number of frames to track before sending notification
-    // Requires 8 detections of same person before sending to Telegram
-    private static final int MIN_TRACKING_FRAMES = 8;
+    // Requires 30 detections of same person before sending to Telegram
+    private static final int MIN_TRACKING_FRAMES = Constants.FPS;
 
     // Maximum time to track a face (10 seconds)
     private static final long MAX_TRACKING_TIME_MS = 10 * 1000;
@@ -455,7 +456,7 @@ public class FaceTrackingService {
 
         /**
          * Determine the most common identity across all observations
-         * @return The person name that appears most frequently (or "Unknown" if tied/most common)
+         * @return The person name that appears most frequently, or "Unknown" if there's a tie
          */
         public String getMostCommonIdentity() {
             Map<String, Integer> identityCounts = new java.util.HashMap<>();
@@ -466,23 +467,25 @@ public class FaceTrackingService {
                 identityCounts.put(name, identityCounts.getOrDefault(name, 0) + 1);
             }
 
-            // Find the most common identity
+            // Find the most common identity and check for ties
             String mostCommon = "Unknown";
             int maxCount = 0;
-            int unknownCount = identityCounts.getOrDefault("Unknown", 0);
+            int tieCount = 0; // Count how many identities share the max count
 
             for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
                 if (entry.getValue() > maxCount) {
                     maxCount = entry.getValue();
                     mostCommon = entry.getKey();
+                    tieCount = 1; // Reset tie count
+                } else if (entry.getValue() == maxCount) {
+                    tieCount++; // Another identity with same count
                 }
             }
 
-            // If Unknown appears at least as much as the winner, prefer Unknown
-            // This is conservative - only identify as known if clearly dominant
-            if (!mostCommon.equals("Unknown") && unknownCount >= maxCount * 0.4) {
-                log.debug("Identity uncertain: '{}' ({} times) vs Unknown ({} times) - reporting as Unknown",
-                    mostCommon, maxCount, unknownCount);
+            // If there's a tie between different identities, return Unknown
+            if (tieCount > 1) {
+                log.debug("Identity uncertain: tie detected with {} identities at {} occurrences - reporting as Unknown",
+                    tieCount, maxCount);
                 return "Unknown";
             }
 
