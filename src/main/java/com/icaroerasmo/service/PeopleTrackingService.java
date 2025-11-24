@@ -57,26 +57,29 @@ public class PeopleTrackingService {
     }
 
     // Minimum number of frames to track before sending notification
-    // Requires more frames (5 * FPS = 150 frames at 30fps -> 5 seconds of frames) to avoid spurious detections
-    private static final int MIN_TRACKING_FRAMES = (int) (Constants.FPS * 5);
+    // Reduced to 3 seconds of frames (90 frames at 30fps) to better handle people turning away
+    private static final int MIN_TRACKING_FRAMES = (int) (Constants.FPS * 3);
 
-    // Maximum time to track a person (15 seconds instead of 10)
-    private static final long MAX_TRACKING_TIME_MS = 15 * 1000;
+    // Maximum time to track a person (20 seconds to handle people turning/walking away)
+    private static final long MAX_TRACKING_TIME_MS = 20 * 1000;
 
-    // Maximum distance between face positions to consider it the same face (pixels)
-    private static final double MAX_POSITION_DISTANCE = 300.0;
+    // Maximum distance between positions to consider it the same person (pixels)
+    // Increased to 500px to track people walking away or across the frame
+    private static final double MAX_POSITION_DISTANCE = 500.0;
 
-    // Face similarity threshold for tracking (extremely lenient)
-    private static final int TRACKING_SIMILARITY_THRESHOLD = 150;
+    // Face similarity threshold for tracking (very lenient to handle face angle changes)
+    // Set to 200 to allow significant variations when person turns their head/back
+    private static final int TRACKING_SIMILARITY_THRESHOLD = 200;
 
-    // Minimum tracking duration before sending (2 seconds for better confidence)
-    private static final long MIN_TRACKING_DURATION_MS = 2000;
+    // Minimum tracking duration before sending (reduced to 1.5 seconds)
+    private static final long MIN_TRACKING_DURATION_MS = 1500;
 
-    // Minimum movement required to consider person as real (increased to 50px)
-    private static final double MIN_MOVEMENT_PIXELS = 50.0;
+    // Minimum movement required to consider person as real (reduced to 30px to be more sensitive)
+    private static final double MIN_MOVEMENT_PIXELS = 30.0;
 
-    // Maximum time gap between detections to keep tracking alive (20 seconds)
-    private static final long TRACK_TIMEOUT_MS = 20000;
+    // Maximum time gap between detections to keep tracking alive (10 seconds)
+    // Allows person to turn around, walk briefly, etc. without losing track
+    private static final long TRACK_TIMEOUT_MS = 10000;
 
     /**
      * Result of tracking containing best frame information and determined identity
@@ -88,9 +91,10 @@ public class PeopleTrackingService {
         private final byte[] bestFaceHash;
         private final double bestConfidenceScore;
         private final byte[] bestImageBytes; // Image bytes of the best frame
+        private final List<Rect> allDetectedRects; // All person rectangles in the frame (for drawing multiple)
 
         public static TrackingResult notReady() {
-            return new TrackingResult(false, null, null, 0.0, null);
+            return new TrackingResult(false, null, null, 0.0, null, null);
         }
     }
 
@@ -122,10 +126,10 @@ public class PeopleTrackingService {
                 byte[] bestFaceHash = track.getBestFaceHash();
                 double bestScore = track.getBestConfidenceScore();
                 byte[] bestImageBytes = track.getBestImageBytes();
-                Rect bestRect = track.getBestRect();
+                List<Rect> bestAllRects = track.getBestAllRects();
 
                 // Send notification
-                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestRect);
+                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllRects);
 
                 // Remove from tracking and cleanup
                 cameraTrackedPeople.remove(track);
@@ -141,14 +145,15 @@ public class PeopleTrackingService {
 
     /**
      * Send notification immediately with cooldown check.
-     * Draws rectangle around the detected person/face on the image before sending.
+     * Draws rectangles around ALL detected people in the image before sending.
      */
     private void sendNotificationNow(String cameraName, String determinedIdentity, double bestScore,
-                                     byte[] bestImageBytes, byte[] bestFaceHash, Rect personRect) {
+                                     byte[] bestImageBytes, byte[] bestFaceHash, List<Rect> allPersonRects) {
         Mat annotatedImg = null;
         try {
-            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}",
-                cameraName, determinedIdentity, String.format("%.2f", bestScore));
+            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}, people count={}",
+                cameraName, determinedIdentity, String.format("%.2f", bestScore),
+                allPersonRects != null ? allPersonRects.size() : 0);
 
             if (bestImageBytes == null || bestImageBytes.length == 0) {
                 log.error("Cannot send notification: image bytes is null or empty");
@@ -174,17 +179,23 @@ public class PeopleTrackingService {
             annotatedImg = originalImg.clone();
             matUtil.releaseResources(originalImg); // Release original, keep annotated
 
-            if (personRect != null) {
+            // Draw rectangles around ALL detected people
+            if (allPersonRects != null && !allPersonRects.isEmpty()) {
                 // Normalize "Unknown Person" to just "Unknown"
                 String displayName = determinedIdentity;
                 if (displayName != null && displayName.toLowerCase().contains("unknown")) {
                     displayName = "Unknown";
                 }
 
-                // Draw rectangle and name on the annotated image
-                matUtil.drawRectangleAndName(annotatedImg, displayName, personRect);
-                log.debug("Drew rectangle for '{}' at ({}, {}, {}, {})",
-                    displayName, personRect.x(), personRect.y(), personRect.width(), personRect.height());
+                // Draw rectangle for each detected person
+                for (Rect personRect : allPersonRects) {
+                    if (personRect != null) {
+                        matUtil.drawRectangleAndName(annotatedImg, displayName, personRect);
+                        log.debug("Drew rectangle for '{}' at ({}, {}, {}, {})",
+                            displayName, personRect.x(), personRect.y(), personRect.width(), personRect.height());
+                    }
+                }
+                log.info("Drew {} rectangles for '{}'", allPersonRects.size(), displayName);
             }
 
             // Convert annotated image back to bytes
@@ -246,9 +257,10 @@ public class PeopleTrackingService {
      * @param faceHash Hash of the face image for similarity comparison
      * @param confidenceScore Recognition confidence score (lower is better)
      * @param imageBytes Image bytes of the current frame
+     * @param allDetectedRects All detected person rectangles in the frame (for drawing multiple)
      * @return TrackingResult indicating if should send, determined identity, and best frame data
      */
-    public TrackingResult trackFace(String cameraName, String personName, Rect faceRect, byte[] faceHash, double confidenceScore, byte[] imageBytes) {
+    public TrackingResult trackFace(String cameraName, String personName, Rect faceRect, byte[] faceHash, double confidenceScore, byte[] imageBytes, List<Rect> allDetectedRects) {
         if (faceRect == null || faceHash == null || imageBytes == null) {
             return TrackingResult.notReady(); // Can't track without face data
         }
@@ -262,7 +274,7 @@ public class PeopleTrackingService {
         if (matchedTrack != null) {
             // Update existing track - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            matchedTrack.addObservation(clonedRect, faceHash, now, confidenceScore, personName, imageBytes);
+            matchedTrack.addObservation(clonedRect, faceHash, now, confidenceScore, personName, imageBytes, allDetectedRects);
 
             long trackingDuration = now - matchedTrack.firstSeen;
             int frameCount = matchedTrack.observations.size();
@@ -295,15 +307,15 @@ public class PeopleTrackingService {
                     byte[] bestFaceHash = matchedTrack.getBestFaceHash();
                     double bestScore = matchedTrack.getBestConfidenceScore();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
-                    Rect bestRect = matchedTrack.getBestRect();
+                    List<Rect> bestAllRects = matchedTrack.getBestAllRects();
 
                     // Send notification immediately
-                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestRect);
+                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllRects);
 
                     // Remove from tracking and cleanup resources
                     cameraTrackedPeople.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes);
+                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes, bestAllRects);
                 } else {
                     log.debug("Camera '{}': Person appears static (moved only {}px) - continuing to track",
                             cameraName, (int)distanceMoved);
@@ -331,14 +343,14 @@ public class PeopleTrackingService {
                     byte[] bestFaceHash = matchedTrack.getBestFaceHash();
                     double bestScore = matchedTrack.getBestConfidenceScore();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
-                    Rect bestRect = matchedTrack.getBestRect();
+                    List<Rect> bestAllRects = matchedTrack.getBestAllRects();
 
                     // Send notification
-                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestRect);
+                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllRects);
 
                     cameraTrackedPeople.remove(matchedTrack);
                     matchedTrack.cleanup();
-                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes);
+                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes, bestAllRects);
                 }
             }
 
@@ -346,7 +358,7 @@ public class PeopleTrackingService {
         } else {
             // New person, start tracking - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            TrackedPerson newTrack = new TrackedPerson(clonedRect, faceHash, now, confidenceScore, personName, imageBytes);
+            TrackedPerson newTrack = new TrackedPerson(clonedRect, faceHash, now, confidenceScore, personName, imageBytes, allDetectedRects);
             cameraTrackedPeople.add(newTrack);
 
             // Schedule timeout notification in case person disappears
@@ -360,7 +372,8 @@ public class PeopleTrackingService {
 
 
     /**
-     * Find a tracked person that matches the current detection
+     * Find a tracked person that matches the current detection.
+     * Uses adaptive matching - more lenient for established tracks to handle people turning around.
      */
     private TrackedPerson findMatchingTrackedPerson(List<TrackedPerson> tracks, Rect faceRect, byte[] faceHash, long currentTime) {
         log.debug("🔍 MATCHING: Checking {} existing tracks for person at ({}, {})", tracks.size(), faceRect.x(), faceRect.y());
@@ -369,7 +382,7 @@ public class PeopleTrackingService {
             Rect lastRect = track.getLatestRect();
             long timeSinceLastSeen = currentTime - track.lastSeen;
 
-            // Check if track is still recent (allow 5 second gaps instead of 2)
+            // Check if track is still recent
             if (timeSinceLastSeen > TRACK_TIMEOUT_MS) {
                 log.debug("❌ Track at ({}, {}) is too old: {}ms > {}ms",
                     lastRect.x(), lastRect.y(), timeSinceLastSeen, TRACK_TIMEOUT_MS);
@@ -381,25 +394,42 @@ public class PeopleTrackingService {
             if (distance > MAX_POSITION_DISTANCE) {
                 log.debug("❌ Track at ({}, {}) is too far: {}px > {}px",
                     lastRect.x(), lastRect.y(), (int)distance, (int)MAX_POSITION_DISTANCE);
-                continue; // Face moved too far
+                continue; // Person moved too far
             }
 
-            // Check face hash similarity (reactivated with high threshold)
+            // Adaptive similarity threshold based on tracking duration
+            // For established tracks (>2 seconds), be more lenient about face similarity
+            // This helps track people who turn their back or change angles
+            long trackDuration = currentTime - track.firstSeen;
+            int adaptiveSimilarityThreshold = TRACKING_SIMILARITY_THRESHOLD;
+
+            if (trackDuration > 2000) { // More than 2 seconds of tracking
+                // For close distances (<150px), be very lenient - probably same person
+                if (distance < 150) {
+                    adaptiveSimilarityThreshold = 300; // Very lenient
+                } else {
+                    adaptiveSimilarityThreshold = 250; // Lenient
+                }
+                log.debug("📈 Using adaptive threshold {} (track age: {}ms, distance: {}px)",
+                    adaptiveSimilarityThreshold, trackDuration, (int)distance);
+            }
+
+            // Check face hash similarity
             int similarity = computeFaceHashSimilarity(faceHash, track.getLatestFaceHash());
             log.debug("📊 Track at ({}, {}) similarity: {} (threshold: {}), distance: {}px, age: {}ms",
-                lastRect.x(), lastRect.y(), similarity, TRACKING_SIMILARITY_THRESHOLD,
+                lastRect.x(), lastRect.y(), similarity, adaptiveSimilarityThreshold,
                 (int)distance, timeSinceLastSeen);
 
-            if (similarity <= TRACKING_SIMILARITY_THRESHOLD) {
-                log.info("✅ MATCHED: Face at ({}, {}) matched to existing track (similarity: {}, distance: {}px)",
-                    faceRect.x(), faceRect.y(), similarity, (int)distance);
+            if (similarity <= adaptiveSimilarityThreshold) {
+                log.info("✅ MATCHED: Person at ({}, {}) matched to existing track (similarity: {}, distance: {}px, track age: {}ms)",
+                    faceRect.x(), faceRect.y(), similarity, (int)distance, trackDuration);
                 return track;
             } else {
-                log.debug("❌ Similarity too high: {} > {} - faces too different", similarity, TRACKING_SIMILARITY_THRESHOLD);
+                log.debug("❌ Similarity too high: {} > {} - faces too different", similarity, adaptiveSimilarityThreshold);
             }
         }
 
-        log.debug("🆕 NO MATCH: Creating new track for face at ({}, {})", faceRect.x(), faceRect.y());
+        log.debug("🆕 NO MATCH: Creating new track for person at ({}, {})", faceRect.x(), faceRect.y());
         return null;
     }
 
@@ -470,17 +500,17 @@ public class PeopleTrackingService {
         private FaceObservation bestObservation; // Track the best scoring observation
         private ScheduledFuture<?> pendingNotification; // Timeout notification future
 
-        public TrackedPerson(Rect initialRect, byte[] initialFaceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes) {
+        public TrackedPerson(Rect initialRect, byte[] initialFaceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes, List<Rect> allRects) {
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, confidenceScore, personName, imageBytes);
+            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, confidenceScore, personName, imageBytes, allRects);
             this.observations.add(observation);
             this.bestObservation = observation; // First is best by default
         }
 
-        public void addObservation(Rect rect, byte[] faceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes) {
+        public void addObservation(Rect rect, byte[] faceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes, List<Rect> allRects) {
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, confidenceScore, personName, imageBytes);
+            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, confidenceScore, personName, imageBytes, allRects);
             this.observations.add(observation);
 
             // Update best observation if this one has lower confidence (better match)
@@ -506,6 +536,11 @@ public class PeopleTrackingService {
             return bestObservation != null ? bestObservation.rect : getLatestRect();
         }
 
+        public List<Rect> getBestAllRects() {
+            return bestObservation != null ? bestObservation.allRects :
+                   (observations.isEmpty() ? new ArrayList<>() : observations.get(observations.size() - 1).allRects);
+        }
+
         public double getBestConfidenceScore() {
             return bestObservation != null ? bestObservation.confidenceScore : 100.0;
         }
@@ -516,8 +551,9 @@ public class PeopleTrackingService {
 
         /**
          * Determine the most common identity across all observations.
-         * If a known person appears in at least 5% of frames, they are recognized as that person.
-         * @return The person name that appears most frequently, or "Unknown" if no known person reaches 5% threshold
+         * If a known person appears in at least 3% of frames, they are recognized as that person.
+         * This lower threshold helps identify people who turn their back to the camera.
+         * @return The person name that appears most frequently, or "Unknown" if no known person reaches 3% threshold
          */
         public String getMostCommonIdentity() {
             Map<String, Integer> identityCounts = new java.util.HashMap<>();
@@ -529,10 +565,10 @@ public class PeopleTrackingService {
                 identityCounts.put(name, identityCounts.getOrDefault(name, 0) + 1);
             }
 
-            // Minimum threshold: 5% of frames
-            int minThreshold = Math.max(1, (int) Math.ceil(totalObservations * 0.05));
+            // Minimum threshold: 3% of frames (reduced from 5% to handle back-turned cases)
+            int minThreshold = Math.max(1, (int) Math.ceil(totalObservations * 0.03));
 
-            // Find the most common KNOWN person (not Unknown) that meets the 5% threshold
+            // Find the most common KNOWN person (not Unknown) that meets the 3% threshold
             String bestKnownPerson = null;
             int bestKnownCount = 0;
 
@@ -549,17 +585,17 @@ public class PeopleTrackingService {
                 }
             }
 
-            // If we found a known person with at least 5% of frames, return them
+            // If we found a known person with at least 3% of frames, return them
             if (bestKnownPerson != null) {
                 double percentage = (bestKnownCount * 100.0) / totalObservations;
-                log.info("Determined identity: '{}' appeared {} times ({}%) out of {} observations (threshold: {} frames = 5%)",
+                log.info("Determined identity: '{}' appeared {} times ({}%) out of {} observations (threshold: {} frames = 3%)",
                     bestKnownPerson, bestKnownCount, String.format("%.1f", percentage), totalObservations, minThreshold);
                 return bestKnownPerson;
             }
 
-            // No known person reached 5% threshold, check if Unknown is the most common
+            // No known person reached 3% threshold, check if Unknown is the most common
             int unknownCount = identityCounts.getOrDefault("Unknown", 0);
-            log.debug("No known person reached 5% threshold ({} frames). Unknown appeared {} times out of {} observations",
+            log.debug("No known person reached 3% threshold ({} frames). Unknown appeared {} times out of {} observations",
                 minThreshold, unknownCount, totalObservations);
 
             return "Unknown";
@@ -628,5 +664,6 @@ public class PeopleTrackingService {
         private final double confidenceScore; // Lower is better
         private final String personName; // Detected identity for this frame
         private final byte[] imageBytes; // Frame image for this observation
+        private final List<Rect> allRects; // All detected person rectangles in this frame
     }
 }

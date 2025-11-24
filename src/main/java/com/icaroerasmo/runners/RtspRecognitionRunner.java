@@ -178,75 +178,79 @@ public class RtspRecognitionRunner {
 
                     // STEP 3: Check if faces were detected
                     if (faces == null || faces.isEmpty()) {
-                        // People detected but NO FACES - use tracking to determine if we should send notification
-                        log.info("Camera '{}': People detected but no faces recognized - tracking unknown person", cameraName);
+                        // People detected but NO FACES - track ALL people individually
+                        log.info("Camera '{}': {} people detected but no faces recognized - tracking all people",
+                            cameraName, detectedPeople.size());
 
                         try {
-                            // Extract first person region for tracking
-                            byte[] personHash = null;
-                            Rect firstPersonRect = null;
-
-                            if (!detectedPeople.isEmpty()) {
-                                firstPersonRect = detectedPeople.get(0);
-                                org.bytedeco.javacpp.BytePointer personBuf = null;
-                                org.bytedeco.javacpp.BytePointer jpgExtPerson = null;
-                                Mat personRegion = null;
-                                try {
-                                    personRegion = new Mat(img, firstPersonRect);
-                                    personBuf = new org.bytedeco.javacpp.BytePointer();
-                                    jpgExtPerson = new org.bytedeco.javacpp.BytePointer(".jpg");
-                                    org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtPerson, personRegion, personBuf);
-                                    personHash = new byte[(int) personBuf.limit()];
-                                    personBuf.get(personHash);
-                                } catch (Exception e) {
-                                    log.warn("Failed to extract person region: {}", e.getMessage());
-                                } finally {
-                                    if (personBuf != null) personBuf.deallocate();
-                                    if (jpgExtPerson != null) jpgExtPerson.deallocate();
-                                    if (personRegion != null) matUtil.releaseResources(personRegion);
-                                }
+                            // Convert full frame to byte array once (reused for all people)
+                            byte[] fullFrameBytes = null;
+                            org.bytedeco.javacpp.BytePointer frameBuf = null;
+                            org.bytedeco.javacpp.BytePointer frameJpgExt = null;
+                            try {
+                                frameBuf = new org.bytedeco.javacpp.BytePointer();
+                                frameJpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
+                                org.bytedeco.opencv.global.opencv_imgcodecs.imencode(frameJpgExt, img, frameBuf);
+                                fullFrameBytes = new byte[(int) frameBuf.limit()];
+                                frameBuf.get(fullFrameBytes);
+                            } catch (Exception e) {
+                                log.warn("Failed to convert frame to bytes: {}", e.getMessage());
+                            } finally {
+                                if (frameBuf != null) frameBuf.deallocate();
+                                if (frameJpgExt != null) frameJpgExt.deallocate();
                             }
 
-                            // Use tracking service to determine if we should send notification
-                            if (firstPersonRect != null && personHash != null) {
-                                // Convert full frame to byte array for tracking
-                                byte[] fullFrameBytes = null;
-                                org.bytedeco.javacpp.BytePointer frameBuf = null;
-                                org.bytedeco.javacpp.BytePointer frameJpgExt = null;
-                                try {
-                                    frameBuf = new org.bytedeco.javacpp.BytePointer();
-                                    frameJpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
-                                    org.bytedeco.opencv.global.opencv_imgcodecs.imencode(frameJpgExt, img, frameBuf);
-                                    fullFrameBytes = new byte[(int) frameBuf.limit()];
-                                    frameBuf.get(fullFrameBytes);
-                                } catch (Exception e) {
-                                    log.warn("Failed to convert frame to bytes: {}", e.getMessage());
-                                } finally {
-                                    if (frameBuf != null) frameBuf.deallocate();
-                                    if (frameJpgExt != null) frameJpgExt.deallocate();
-                                }
+                            if (fullFrameBytes != null) {
+                                // Track EACH person individually
+                                for (int i = 0; i < detectedPeople.size(); i++) {
+                                    Rect personRect = detectedPeople.get(i);
 
-                                if (fullFrameBytes != null) {
-                                    PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
-                                        cameraName,
-                                        "Unknown Person",
-                                        firstPersonRect,
-                                        personHash,
-                                        100.0, // High confidence that it's unknown
-                                        fullFrameBytes
-                                    );
+                                    // Extract person region for tracking
+                                    byte[] personHash = null;
+                                    org.bytedeco.javacpp.BytePointer personBuf = null;
+                                    org.bytedeco.javacpp.BytePointer jpgExtPerson = null;
+                                    Mat personRegion = null;
+                                    try {
+                                        personRegion = new Mat(img, personRect);
+                                        personBuf = new org.bytedeco.javacpp.BytePointer();
+                                        jpgExtPerson = new org.bytedeco.javacpp.BytePointer(".jpg");
+                                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtPerson, personRegion, personBuf);
+                                        personHash = new byte[(int) personBuf.limit()];
+                                        personBuf.get(personHash);
+                                    } catch (Exception e) {
+                                        log.warn("Failed to extract person region {}: {}", i + 1, e.getMessage());
+                                        continue; // Skip this person
+                                    } finally {
+                                        if (personBuf != null) personBuf.deallocate();
+                                        if (jpgExtPerson != null) jpgExtPerson.deallocate();
+                                        if (personRegion != null) matUtil.releaseResources(personRegion);
+                                    }
 
-                                    // Note: Notification is sent by the tracking service when shouldSend=true
-                                    // We just log the result here
-                                    if (trackingResult.isShouldSend()) {
-                                        log.info("Camera '{}': Unknown person notification sent by tracking service", cameraName);
-                                    } else {
-                                        log.debug("Camera '{}': Still tracking unknown person, not ready to send yet", cameraName);
+                                    // Track this person, passing ALL people rectangles for drawing
+                                    if (personHash != null) {
+                                        PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
+                                            cameraName,
+                                            "Unknown Person",
+                                            personRect,
+                                            personHash,
+                                            100.0, // High confidence that it's unknown
+                                            fullFrameBytes,
+                                            detectedPeople // Pass ALL detected people rectangles for drawing
+                                        );
+
+                                        // When this person's tracking is ready, notification will have ALL people highlighted
+                                        if (trackingResult.isShouldSend()) {
+                                            log.info("Camera '{}': Person #{} tracked successfully - notification sent with {} people highlighted",
+                                                cameraName, i + 1, detectedPeople.size());
+                                        } else {
+                                            log.debug("Camera '{}': Still tracking person #{} (total {} people)",
+                                                cameraName, i + 1, detectedPeople.size());
+                                        }
                                     }
                                 }
-                        }
+                            }
                         } catch (Exception e) {
-                            log.error("Failed to process unknown person for camera '{}': {}", cameraName, e.getMessage(), e);
+                            log.error("Failed to process unknown people for camera '{}': {}", cameraName, e.getMessage(), e);
                         }
 
                         return; // Don't continue processing if no faces detected
@@ -346,6 +350,12 @@ public class RtspRecognitionRunner {
                                 } else {
                                     log.info("📊 CALLING TRACKING SERVICE: camera='{}', person='{}'", cameraName, firstFace.getPersonName());
 
+                                    // Collect all face rectangles for drawing
+                                    List<Rect> allFaceRects = faces.stream()
+                                        .map(FaceRecognition.DetectedFaces::getFaceRect)
+                                        .filter(rect -> rect != null)
+                                        .collect(Collectors.toList());
+
                                     // Track face with current detection name and confidence score
                                     PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
                                             cameraName,
@@ -353,7 +363,8 @@ public class RtspRecognitionRunner {
                                             firstFace.getFaceRect(),
                                             faceHash,
                                             firstFace.getConfidence(),
-                                            imageBytes // Pass current frame image bytes
+                                            imageBytes, // Pass current frame image bytes
+                                            allFaceRects // Pass all detected face rectangles
                                     );
 
                                     log.info("📋 TRACKING RESULT: shouldSend={}, personName={}, score={}",
