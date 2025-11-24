@@ -515,11 +515,13 @@ public class PeopleTrackingService {
         }
 
         /**
-         * Determine the most common identity across all observations
-         * @return The person name that appears most frequently, or "Unknown" if there's a tie
+         * Determine the most common identity across all observations.
+         * If a known person appears in at least 5% of frames, they are recognized as that person.
+         * @return The person name that appears most frequently, or "Unknown" if no known person reaches 5% threshold
          */
         public String getMostCommonIdentity() {
             Map<String, Integer> identityCounts = new java.util.HashMap<>();
+            int totalObservations = observations.size();
 
             // Count occurrences of each identity
             for (FaceObservation obs : observations) {
@@ -527,33 +529,42 @@ public class PeopleTrackingService {
                 identityCounts.put(name, identityCounts.getOrDefault(name, 0) + 1);
             }
 
-            // Find the most common identity and check for ties
-            String mostCommon = "Unknown";
-            int maxCount = 0;
-            int tieCount = 0; // Count how many identities share the max count
+            // Minimum threshold: 5% of frames
+            int minThreshold = Math.max(1, (int) Math.ceil(totalObservations * 0.05));
+
+            // Find the most common KNOWN person (not Unknown) that meets the 5% threshold
+            String bestKnownPerson = null;
+            int bestKnownCount = 0;
 
             for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
-                if (entry.getValue() > maxCount) {
-                    maxCount = entry.getValue();
-                    mostCommon = entry.getKey();
-                    tieCount = 1; // Reset tie count
-                } else if (entry.getValue() == maxCount) {
-                    tieCount++; // Another identity with same count
+                String name = entry.getKey();
+                int count = entry.getValue();
+
+                // Skip "Unknown" when looking for known persons
+                if (!"Unknown".equalsIgnoreCase(name) && !name.toLowerCase().contains("unknown")) {
+                    if (count >= minThreshold && count > bestKnownCount) {
+                        bestKnownCount = count;
+                        bestKnownPerson = name;
+                    }
                 }
             }
 
-            // If there's a tie between different identities, return Unknown
-            if (tieCount > 1) {
-                log.debug("Identity uncertain: tie detected with {} identities at {} occurrences - reporting as Unknown",
-                    tieCount, maxCount);
-                return "Unknown";
+            // If we found a known person with at least 5% of frames, return them
+            if (bestKnownPerson != null) {
+                double percentage = (bestKnownCount * 100.0) / totalObservations;
+                log.info("Determined identity: '{}' appeared {} times ({}%) out of {} observations (threshold: {} frames = 5%)",
+                    bestKnownPerson, bestKnownCount, String.format("%.1f", percentage), totalObservations, minThreshold);
+                return bestKnownPerson;
             }
 
-            log.debug("Determined identity: '{}' appeared {} times out of {} observations",
-                mostCommon, maxCount, observations.size());
+            // No known person reached 5% threshold, check if Unknown is the most common
+            int unknownCount = identityCounts.getOrDefault("Unknown", 0);
+            log.debug("No known person reached 5% threshold ({} frames). Unknown appeared {} times out of {} observations",
+                minThreshold, unknownCount, totalObservations);
 
-            return mostCommon;
+            return "Unknown";
         }
+
 
         /**
          * Calculate total distance the face has moved
