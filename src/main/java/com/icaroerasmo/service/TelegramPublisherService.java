@@ -78,15 +78,14 @@ public class TelegramPublisherService {
 
         for (Map.Entry<String, Double> entry : detectedPeopleWithScores.entrySet()) {
             String personName = entry.getKey();
-            double confidence = entry.getValue();
-            double calculatedConfidence = Math.abs(100 - confidence);
+            double distance = entry.getValue();
 
-            final String fomattedPercentage = String.format("%.2f", calculatedConfidence);
+            final String formattedDistance = String.format("%.2f", distance);
 
             if ("Unknown".equalsIgnoreCase(personName)) {
-                caption.append("🔍 Unknown Person (").append(fomattedPercentage).append("%)\n");
+                caption.append("🔍 Unknown Person (distance: ").append(formattedDistance).append(")\n");
             } else {
-                caption.append("✓ ").append(personName).append(" (").append(fomattedPercentage).append("%)\n");
+                caption.append("✓ ").append(personName).append(" (distance: ").append(formattedDistance).append(")\n");
             }
         }
 

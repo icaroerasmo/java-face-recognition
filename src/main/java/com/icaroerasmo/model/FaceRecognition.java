@@ -17,7 +17,7 @@ public class FaceRecognition {
     @AllArgsConstructor
     public static class DetectedFaces {
         private String personName;
-        private Double confidence;
+        private Double distance;
         private Rect faceRect;
     }
 }

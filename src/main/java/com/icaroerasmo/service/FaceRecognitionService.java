@@ -42,8 +42,16 @@ public class FaceRecognitionService {
     private final TrainingMetadataRepository trainingMetadataRepository;
     private final TrainedDatasetRepository trainedDatasetRepository;
 
-    public static final int MIN_SCORE = 50;
+    // Base distance threshold for reference (medium-sized faces at typical resolution)
+    public static final double BASE_DISTANCE = 60.0;
     public static final String UNKNOWN = "Unknown";
+
+    // Expected face ratio for calibration (5% of frame area is typical for good recognition)
+    private static final double EXPECTED_FACE_RATIO = 0.05;
+
+    // Min and max adaptive thresholds
+    private static final double MIN_ADAPTIVE_THRESHOLD = 30.0;
+    private static final double MAX_ADAPTIVE_THRESHOLD = 90.0;
 
     public FaceRecognizer load() {
         FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
@@ -80,6 +88,11 @@ public class FaceRecognitionService {
             return new FaceRecognition(List.of(), testImage);
         }
 
+        // Calculate frame area for adaptive threshold calculation
+        final double frameArea = testImage.rows() * testImage.cols();
+        log.debug("Frame resolution: {}x{}, total area: {} pixels",
+            testImage.cols(), testImage.rows(), (long)frameArea);
+
         List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
 
             Mat extractedFace = null;
@@ -111,26 +124,39 @@ public class FaceRecognitionService {
                 }
 
                 IntPointer detectedPersonPtr = new IntPointer(1);
-                DoublePointer confidencePtr = new DoublePointer(1);
+                DoublePointer distancePtr = new DoublePointer(1);
 
                 // CRITICAL: Synchronize on the FaceRecognizer instance to prevent concurrent access
                 // The recognizer maintains internal state that can be corrupted by concurrent predictions
                 synchronized (faceRecognizer) {
-                    faceRecognizer.predict(img, detectedPersonPtr, confidencePtr);
+                    faceRecognizer.predict(img, detectedPersonPtr, distancePtr);
 
                     String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
                     String detectedPerson = label.substring(0, label.length() - 1);
-                    double detectionConfidence = confidencePtr.get(0);
+                    double detectionDistance = distancePtr.get(0);
 
-                    if (detectionConfidence > MIN_SCORE) {
-                        log.debug("Detected person is {} with confidence {} but score is bigger than {} so result is {}.",
-                                detectedPerson, detectionConfidence, MIN_SCORE, UNKNOWN);
+                    // Calculate adaptive threshold based on face size relative to frame
+                    double faceArea = faceRect.width() * faceRect.height();
+                    double faceRatio = faceArea / frameArea;
+                    double adaptiveThreshold = calculateAdaptiveThreshold(faceRatio);
+
+                    if (detectionDistance > adaptiveThreshold) {
+                        log.debug("Detected person is {} with distance {} (adaptive threshold: {}, face ratio: {}%) - classified as {}",
+                                detectedPerson,
+                                String.format("%.2f", detectionDistance),
+                                String.format("%.2f", adaptiveThreshold),
+                                String.format("%.4f", faceRatio * 100),
+                                UNKNOWN);
                         detectedPerson = UNKNOWN;
                     } else {
-                        log.debug("Detected person is {} with confidence {}", detectedPerson, detectionConfidence);
+                        log.debug("Detected person is {} with distance {} (adaptive threshold: {}, face ratio: {}%)",
+                                detectedPerson,
+                                String.format("%.2f", detectionDistance),
+                                String.format("%.2f", adaptiveThreshold),
+                                String.format("%.4f", faceRatio * 100));
                     }
 
-                    return new FaceRecognition.DetectedFaces(detectedPerson, detectionConfidence, faceRect);
+                    return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, faceRect);
                 }
             } catch(Exception e) {
                 log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
@@ -452,5 +478,35 @@ public class FaceRecognitionService {
             sb.append(String.format("%02x", b));
         }
         return sb.toString();
+    }
+
+    /**
+     * Calculate adaptive distance threshold based on face size ratio to frame area.
+     * This makes the recognition resolution-independent and adjusts for distance to camera.
+     *
+     * Logic:
+     * - Larger faces (closer to camera) = stricter threshold (better quality expected)
+     * - Smaller faces (farther from camera) = more lenient threshold (account for lower quality)
+     *
+     * @param faceRatio Ratio of face area to frame area (0.0 to 1.0)
+     * @return Adaptive distance threshold for recognition
+     */
+    private double calculateAdaptiveThreshold(double faceRatio) {
+        if (faceRatio >= EXPECTED_FACE_RATIO) {
+            // Face is larger than expected (person is closer to camera)
+            // Use stricter threshold - high quality image should match better
+            // Example: face is 10% of frame (2x expected) → threshold = 30
+            //          face is 7.5% of frame (1.5x expected) → threshold = 40
+            double threshold = BASE_DISTANCE * (EXPECTED_FACE_RATIO / faceRatio);
+            return Math.max(threshold, MIN_ADAPTIVE_THRESHOLD);
+        } else {
+            // Face is smaller than expected (person is farther from camera)
+            // Use more lenient threshold - lower quality may affect matching
+            // Example: face is 2.5% of frame (0.5x expected) → threshold = 75
+            //          face is 1.25% of frame (0.25x expected) → threshold = 85
+            double factor = Math.sqrt(EXPECTED_FACE_RATIO / faceRatio);
+            double threshold = BASE_DISTANCE * factor;
+            return Math.min(threshold, MAX_ADAPTIVE_THRESHOLD);
+        }
     }
 }

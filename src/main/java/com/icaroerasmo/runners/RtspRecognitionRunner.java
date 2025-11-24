@@ -258,7 +258,7 @@ public class RtspRecognitionRunner {
 
                     // Filter out faces with score > 100
                     faces = faces.stream()
-                            .filter(face -> face.getConfidence() <= 100)
+                            .filter(face -> face.getDistance() <= 100)
                             .collect(Collectors.toList());
 
                     if (faces.isEmpty()) {
@@ -266,11 +266,11 @@ public class RtspRecognitionRunner {
                         return;
                     }
 
-                    // Collect detected names with their confidence scores
+                    // Collect detected names with their distance scores
                     Map<String, Double> detectedPeopleWithScores = faces.stream()
                             .collect(Collectors.toMap(
                                     FaceRecognition.DetectedFaces::getPersonName,
-                                    FaceRecognition.DetectedFaces::getConfidence,
+                                    FaceRecognition.DetectedFaces::getDistance,
                                     (existing, replacement) -> existing // Keep first if duplicate
                             ));
 
@@ -287,7 +287,7 @@ public class RtspRecognitionRunner {
                                 }
                             });
 
-                            // Convert Mat to byte array using imencode
+                            // Convert Mat to byte array using imencode (used for all faces)
                             org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
                             org.bytedeco.javacpp.BytePointer jpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
                             org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, finalImg, buf);
@@ -296,17 +296,25 @@ public class RtspRecognitionRunner {
                             buf.deallocate();
                             jpgExt.deallocate();
 
-                            // Extract face region for similarity comparison
-                            byte[] faceHash = null;
-                            if (!faces.isEmpty()) {
-                                FaceRecognition.DetectedFaces firstFace = faces.get(0);
-                                if (firstFace.getFaceRect() != null) {
+                            // Collect all face rectangles for drawing (computed once, used for all)
+                            List<Rect> allFaceRects = faces.stream()
+                                .map(FaceRecognition.DetectedFaces::getFaceRect)
+                                .filter(rect -> rect != null)
+                                .collect(Collectors.toList());
+
+                            // Track EACH detected face individually
+                            for (int faceIdx = 0; faceIdx < faces.size(); faceIdx++) {
+                                FaceRecognition.DetectedFaces face = faces.get(faceIdx);
+
+                                // Extract this face's region for similarity comparison
+                                byte[] faceHash = null;
+                                if (face.getFaceRect() != null) {
                                     org.bytedeco.javacpp.BytePointer faceBuf = null;
                                     org.bytedeco.javacpp.BytePointer jpgExtFace = null;
                                     Mat faceRegion = null;
                                     try {
                                         // Extract the face region from original image
-                                        faceRegion = new Mat(img, firstFace.getFaceRect());
+                                        faceRegion = new Mat(img, face.getFaceRect());
 
                                         // Convert face to byte array for hashing
                                         faceBuf = new org.bytedeco.javacpp.BytePointer();
@@ -315,73 +323,68 @@ public class RtspRecognitionRunner {
                                         faceHash = new byte[(int) faceBuf.limit()];
                                         faceBuf.get(faceHash);
                                     } catch (Exception e) {
-                                        log.warn("Failed to extract face region for camera '{}': {}", cameraName, e.getMessage());
+                                        log.warn("Failed to extract face region {} for camera '{}': {}",
+                                            faceIdx + 1, cameraName, e.getMessage());
+                                        continue; // Skip this face
                                     } finally {
                                         // Clean up resources
-                                        if (faceBuf != null) {
-                                            faceBuf.deallocate();
-                                        }
-                                        if (jpgExtFace != null) {
-                                            jpgExtFace.deallocate();
-                                        }
-                                        if (faceRegion != null) {
-                                            matUtil.releaseResources(faceRegion);
-                                        }
+                                        if (faceBuf != null) faceBuf.deallocate();
+                                        if (jpgExtFace != null) jpgExtFace.deallocate();
+                                        if (faceRegion != null) matUtil.releaseResources(faceRegion);
                                     }
                                 }
-                            }
 
-                            // Use face tracking for ALL persons (both known and unknown)
-                            // Track the face across multiple frames to determine true identity
-                            if (!faces.isEmpty()) {
-                                FaceRecognition.DetectedFaces firstFace = faces.get(0);
-                                log.info("🔍 FRAME PROCESSING: camera='{}', person='{}', confidence={}, rect={}, faceHash={}, imageBytes={}",
+                                log.info("🔍 FRAME PROCESSING: camera='{}', face #{}, person='{}', distance={}, rect={}, faceHash={}, imageBytes={}",
                                     cameraName,
-                                    firstFace.getPersonName(),
-                                    String.format("%.2f", firstFace.getConfidence()),
-                                    (firstFace.getFaceRect() != null),
+                                    faceIdx + 1,
+                                    face.getPersonName(),
+                                    String.format("%.2f", face.getDistance()),
+                                    (face.getFaceRect() != null),
                                     (faceHash != null ? faceHash.length : 0),
                                     (imageBytes != null ? imageBytes.length : 0));
 
-                                if (firstFace.getFaceRect() == null) {
-                                    log.warn("⚠️ SKIPPED: faceRect is null for camera '{}'", cameraName);
-                                } else if (faceHash == null) {
-                                    log.warn("⚠️ SKIPPED: faceHash is null for camera '{}'", cameraName);
-                                } else {
-                                    log.info("📊 CALLING TRACKING SERVICE: camera='{}', person='{}'", cameraName, firstFace.getPersonName());
-
-                                    // Collect all face rectangles for drawing
-                                    List<Rect> allFaceRects = faces.stream()
-                                        .map(FaceRecognition.DetectedFaces::getFaceRect)
-                                        .filter(rect -> rect != null)
-                                        .collect(Collectors.toList());
-
-                                    // Track face with current detection name and confidence score
-                                    PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
-                                            cameraName,
-                                            firstFace.getPersonName(), // Pass current detection name
-                                            firstFace.getFaceRect(),
-                                            faceHash,
-                                            firstFace.getConfidence(),
-                                            imageBytes, // Pass current frame image bytes
-                                            allFaceRects // Pass all detected face rectangles
-                                    );
-
-                                    log.info("📋 TRACKING RESULT: shouldSend={}, personName={}, score={}",
-                                        trackingResult.isShouldSend(),
-                                        trackingResult.getPersonName(),
-                                        trackingResult.isShouldSend() ? String.format("%.2f", trackingResult.getBestConfidenceScore()) : "N/A");
-
-                                    // Note: Notification is sent by the tracking service when shouldSend=true
-                                    // We just log the result here
-                                    if (trackingResult.isShouldSend()) {
-                                        log.info("✅ VERDICT REACHED! Notification sent by tracking service for '{}'",
-                                            trackingResult.getPersonName());
-                                    } else {
-                                        log.debug("⏳ STILL TRACKING: camera='{}', not ready to send yet", cameraName);
-                                    }
+                                if (face.getFaceRect() == null) {
+                                    log.warn("⚠️ SKIPPED: faceRect is null for face #{} in camera '{}'", faceIdx + 1, cameraName);
+                                    continue;
                                 }
-                            } else {
+
+                                if (faceHash == null) {
+                                    log.warn("⚠️ SKIPPED: faceHash is null for face #{} in camera '{}'", faceIdx + 1, cameraName);
+                                    continue;
+                                }
+
+                                log.info("📊 CALLING TRACKING SERVICE: camera='{}', face #{}, person='{}'",
+                                    cameraName, faceIdx + 1, face.getPersonName());
+
+                                // Track this face with all face rectangles for drawing
+                                PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
+                                    cameraName,
+                                    face.getPersonName(), // This person's name
+                                    face.getFaceRect(),   // This person's rect
+                                    faceHash,             // This person's hash
+                                    face.getDistance(),   // This person's distance
+                                    imageBytes,           // Full frame image bytes
+                                    allFaceRects         // ALL detected face rectangles for drawing
+                                );
+
+                                log.info("📋 TRACKING RESULT: camera='{}', face #{}, shouldSend={}, personName={}, score={}",
+                                    cameraName,
+                                    faceIdx + 1,
+                                    trackingResult.isShouldSend(),
+                                    trackingResult.getPersonName(),
+                                    trackingResult.isShouldSend() ? String.format("%.2f", trackingResult.getBestDistance()) : "N/A");
+
+                                // When this person's tracking is ready, notification will have ALL faces highlighted
+                                if (trackingResult.isShouldSend()) {
+                                    log.info("✅ VERDICT REACHED! Face #{} tracked successfully - notification sent with {} faces highlighted for '{}'",
+                                        faceIdx + 1, allFaceRects.size(), trackingResult.getPersonName());
+                                } else {
+                                    log.debug("⏳ STILL TRACKING: camera='{}', face #{} not ready to send yet",
+                                        cameraName, faceIdx + 1);
+                                }
+                            }
+
+                            if (faces.isEmpty()) {
                                 log.debug("📭 NO FACES: Skipping frame from camera '{}'", cameraName);
                             }
 

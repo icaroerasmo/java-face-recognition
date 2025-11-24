@@ -89,7 +89,7 @@ public class PeopleTrackingService {
         private final boolean shouldSend;
         private final String personName; // Determined identity (most common across frames)
         private final byte[] bestFaceHash;
-        private final double bestConfidenceScore;
+        private final double bestDistance;
         private final byte[] bestImageBytes; // Image bytes of the best frame
         private final List<Rect> allDetectedRects; // All person rectangles in the frame (for drawing multiple)
 
@@ -124,7 +124,7 @@ public class PeopleTrackingService {
 
                 // Get best frame data
                 byte[] bestFaceHash = track.getBestFaceHash();
-                double bestScore = track.getBestConfidenceScore();
+                double bestScore = track.getBestDistance();
                 byte[] bestImageBytes = track.getBestImageBytes();
                 List<Rect> bestAllRects = track.getBestAllRects();
 
@@ -255,12 +255,12 @@ public class PeopleTrackingService {
      * @param personName Detected person name (or "Unknown")
      * @param faceRect Rectangle of the detected face/person
      * @param faceHash Hash of the face image for similarity comparison
-     * @param confidenceScore Recognition confidence score (lower is better)
+     * @param distance Recognition distance score (lower is better)
      * @param imageBytes Image bytes of the current frame
      * @param allDetectedRects All detected person rectangles in the frame (for drawing multiple)
      * @return TrackingResult indicating if should send, determined identity, and best frame data
      */
-    public TrackingResult trackFace(String cameraName, String personName, Rect faceRect, byte[] faceHash, double confidenceScore, byte[] imageBytes, List<Rect> allDetectedRects) {
+    public TrackingResult trackFace(String cameraName, String personName, Rect faceRect, byte[] faceHash, double distance, byte[] imageBytes, List<Rect> allDetectedRects) {
         if (faceRect == null || faceHash == null || imageBytes == null) {
             return TrackingResult.notReady(); // Can't track without face data
         }
@@ -274,14 +274,14 @@ public class PeopleTrackingService {
         if (matchedTrack != null) {
             // Update existing track - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            matchedTrack.addObservation(clonedRect, faceHash, now, confidenceScore, personName, imageBytes, allDetectedRects);
+            matchedTrack.addObservation(clonedRect, faceHash, now, distance, personName, imageBytes, allDetectedRects);
 
             long trackingDuration = now - matchedTrack.firstSeen;
             int frameCount = matchedTrack.observations.size();
 
             log.debug("Camera '{}': Tracking person - {} frames over {}ms (distance moved: {}px, best score: {}, current: {})",
                     cameraName, frameCount, trackingDuration, (int)matchedTrack.getTotalDistanceMoved(),
-                    String.format("%.2f", matchedTrack.getBestConfidenceScore()), personName);
+                    String.format("%.2f", matchedTrack.getBestDistance()), personName);
 
             // Cancel any existing timeout notification and schedule a new one
             // This ensures notification is sent if person disappears before reaching threshold
@@ -298,14 +298,14 @@ public class PeopleTrackingService {
 
                     log.info("Camera '{}': Person tracked through {} frames over {}ms, moved {}px, determined identity: '{}', best score: {} - ready to send notification",
                             cameraName, frameCount, trackingDuration, (int)distanceMoved, determinedIdentity,
-                            String.format("%.2f", matchedTrack.getBestConfidenceScore()));
+                            String.format("%.2f", matchedTrack.getBestDistance()));
 
                     // Cancel timeout since we're sending immediately
                     matchedTrack.cancelPendingNotification();
 
                     // Get best frame data before cleanup
                     byte[] bestFaceHash = matchedTrack.getBestFaceHash();
-                    double bestScore = matchedTrack.getBestConfidenceScore();
+                    double bestScore = matchedTrack.getBestDistance();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
                     List<Rect> bestAllRects = matchedTrack.getBestAllRects();
 
@@ -337,11 +337,11 @@ public class PeopleTrackingService {
 
                     log.info("Camera '{}': Person tracking expired after {}ms, moved {}px, determined identity: '{}', best score: {} - sending notification",
                             cameraName, trackingDuration, (int)distanceMoved, determinedIdentity,
-                            String.format("%.2f", matchedTrack.getBestConfidenceScore()));
+                            String.format("%.2f", matchedTrack.getBestDistance()));
 
                     // Get best frame data before cleanup
                     byte[] bestFaceHash = matchedTrack.getBestFaceHash();
-                    double bestScore = matchedTrack.getBestConfidenceScore();
+                    double bestScore = matchedTrack.getBestDistance();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
                     List<Rect> bestAllRects = matchedTrack.getBestAllRects();
 
@@ -358,14 +358,14 @@ public class PeopleTrackingService {
         } else {
             // New person, start tracking - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            TrackedPerson newTrack = new TrackedPerson(clonedRect, faceHash, now, confidenceScore, personName, imageBytes, allDetectedRects);
+            TrackedPerson newTrack = new TrackedPerson(clonedRect, faceHash, now, distance, personName, imageBytes, allDetectedRects);
             cameraTrackedPeople.add(newTrack);
 
             // Schedule timeout notification in case person disappears
             scheduleTimeoutNotification(newTrack, cameraName, cameraTrackedPeople);
 
             log.debug("Camera '{}': Started tracking new person '{}' at position ({}, {}) with score {} (timeout notification scheduled)",
-                    cameraName, personName, faceRect.x(), faceRect.y(), String.format("%.2f", confidenceScore));
+                    cameraName, personName, faceRect.x(), faceRect.y(), String.format("%.2f", distance));
             return TrackingResult.notReady(); // Just started tracking
         }
     }
@@ -500,21 +500,21 @@ public class PeopleTrackingService {
         private FaceObservation bestObservation; // Track the best scoring observation
         private ScheduledFuture<?> pendingNotification; // Timeout notification future
 
-        public TrackedPerson(Rect initialRect, byte[] initialFaceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes, List<Rect> allRects) {
+        public TrackedPerson(Rect initialRect, byte[] initialFaceHash, long timestamp, double distanceScore, String personName, byte[] imageBytes, List<Rect> allRects) {
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, confidenceScore, personName, imageBytes, allRects);
+            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, distanceScore, personName, imageBytes, allRects);
             this.observations.add(observation);
             this.bestObservation = observation; // First is best by default
         }
 
-        public void addObservation(Rect rect, byte[] faceHash, long timestamp, double confidenceScore, String personName, byte[] imageBytes, List<Rect> allRects) {
+        public void addObservation(Rect rect, byte[] faceHash, long timestamp, double distanceScore, String personName, byte[] imageBytes, List<Rect> allRects) {
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, confidenceScore, personName, imageBytes, allRects);
+            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, distanceScore, personName, imageBytes, allRects);
             this.observations.add(observation);
 
-            // Update best observation if this one has lower confidence (better match)
-            if (bestObservation == null || confidenceScore < bestObservation.confidenceScore) {
+            // Update best observation if this one has lower distance (better match)
+            if (bestObservation == null || distanceScore < bestObservation.distanceScore) {
                 bestObservation = observation;
             }
         }
@@ -541,8 +541,8 @@ public class PeopleTrackingService {
                    (observations.isEmpty() ? new ArrayList<>() : observations.get(observations.size() - 1).allRects);
         }
 
-        public double getBestConfidenceScore() {
-            return bestObservation != null ? bestObservation.confidenceScore : 100.0;
+        public double getBestDistance() {
+            return bestObservation != null ? bestObservation.distanceScore : 100.0;
         }
 
         public byte[] getBestImageBytes() {
@@ -661,7 +661,7 @@ public class PeopleTrackingService {
         private final Rect rect;
         private final byte[] faceHash;
         private final long timestamp;
-        private final double confidenceScore; // Lower is better
+        private final double distanceScore; // Lower is better
         private final String personName; // Detected identity for this frame
         private final byte[] imageBytes; // Frame image for this observation
         private final List<Rect> allRects; // All detected person rectangles in this frame
