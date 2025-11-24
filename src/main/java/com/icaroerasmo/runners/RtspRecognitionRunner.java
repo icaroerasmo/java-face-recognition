@@ -7,13 +7,15 @@ import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionHistoryService;
 import com.icaroerasmo.service.FaceRecognitionService;
 import com.icaroerasmo.service.FaceRecognizerHolder;
-import com.icaroerasmo.service.FaceTrackingService;
+import com.icaroerasmo.service.PeopleTrackingService;
 import com.icaroerasmo.service.TelegramPublisherService;
 import com.icaroerasmo.service.RtspFrameExtractorService;
+import com.icaroerasmo.service.PersonDetectionService;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Rect;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.core.io.ClassPathResource;
@@ -41,7 +43,8 @@ public class RtspRecognitionRunner {
     private final MatUtil matUtil;
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
-    private final FaceTrackingService faceTrackingService;
+    private final PeopleTrackingService peopleTrackingService;
+    private final PersonDetectionService personDetectionService;
     private final StreamsProperties streamsProperties;
     private final TrainingProperties trainingProperties;
 
@@ -147,6 +150,16 @@ public class RtspRecognitionRunner {
                             return;
                         }
 
+                        // STEP 1: First detect if there are any people in the frame
+                        List<Rect> detectedPeople = personDetectionService.detectPeople(img);
+
+                        if (detectedPeople.isEmpty()) {
+                            // No people detected at all - skip this frame
+                            return;
+                        }
+
+                        log.debug("Camera '{}': Detected {} person(s) in frame", cameraName, detectedPeople.size());
+
                         // Get the current recognizer from the holder (thread-safe)
                         FaceRecognizer currentRecognizer = faceRecognizerHolder.get();
                         if (currentRecognizer == null) {
@@ -154,6 +167,7 @@ public class RtspRecognitionRunner {
                             return;
                         }
 
+                        // STEP 2: Try to recognize faces in the frame
                         faceRecognition = faceRecognitionService.test(currentRecognizer, img);
 
                     if (faceRecognition == null) {
@@ -162,8 +176,80 @@ public class RtspRecognitionRunner {
 
                     List<FaceRecognition.DetectedFaces> faces = faceRecognition.getFaces();
 
+                    // STEP 3: Check if faces were detected
                     if (faces == null || faces.isEmpty()) {
-                        return;
+                        // People detected but NO FACES - use tracking to determine if we should send notification
+                        log.info("Camera '{}': People detected but no faces recognized - tracking unknown person", cameraName);
+
+                        try {
+                            // Extract first person region for tracking
+                            byte[] personHash = null;
+                            Rect firstPersonRect = null;
+
+                            if (!detectedPeople.isEmpty()) {
+                                firstPersonRect = detectedPeople.get(0);
+                                org.bytedeco.javacpp.BytePointer personBuf = null;
+                                org.bytedeco.javacpp.BytePointer jpgExtPerson = null;
+                                Mat personRegion = null;
+                                try {
+                                    personRegion = new Mat(img, firstPersonRect);
+                                    personBuf = new org.bytedeco.javacpp.BytePointer();
+                                    jpgExtPerson = new org.bytedeco.javacpp.BytePointer(".jpg");
+                                    org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtPerson, personRegion, personBuf);
+                                    personHash = new byte[(int) personBuf.limit()];
+                                    personBuf.get(personHash);
+                                } catch (Exception e) {
+                                    log.warn("Failed to extract person region: {}", e.getMessage());
+                                } finally {
+                                    if (personBuf != null) personBuf.deallocate();
+                                    if (jpgExtPerson != null) jpgExtPerson.deallocate();
+                                    if (personRegion != null) matUtil.releaseResources(personRegion);
+                                }
+                            }
+
+                            // Use tracking service to determine if we should send notification
+                            if (firstPersonRect != null && personHash != null) {
+                                // Convert full frame to byte array for tracking
+                                byte[] fullFrameBytes = null;
+                                org.bytedeco.javacpp.BytePointer frameBuf = null;
+                                org.bytedeco.javacpp.BytePointer frameJpgExt = null;
+                                try {
+                                    frameBuf = new org.bytedeco.javacpp.BytePointer();
+                                    frameJpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
+                                    org.bytedeco.opencv.global.opencv_imgcodecs.imencode(frameJpgExt, img, frameBuf);
+                                    fullFrameBytes = new byte[(int) frameBuf.limit()];
+                                    frameBuf.get(fullFrameBytes);
+                                } catch (Exception e) {
+                                    log.warn("Failed to convert frame to bytes: {}", e.getMessage());
+                                } finally {
+                                    if (frameBuf != null) frameBuf.deallocate();
+                                    if (frameJpgExt != null) frameJpgExt.deallocate();
+                                }
+
+                                if (fullFrameBytes != null) {
+                                    PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
+                                        cameraName,
+                                        "Unknown Person",
+                                        firstPersonRect,
+                                        personHash,
+                                        100.0, // High confidence that it's unknown
+                                        fullFrameBytes
+                                    );
+
+                                    // Note: Notification is sent by the tracking service when shouldSend=true
+                                    // We just log the result here
+                                    if (trackingResult.isShouldSend()) {
+                                        log.info("Camera '{}': Unknown person notification sent by tracking service", cameraName);
+                                    } else {
+                                        log.debug("Camera '{}': Still tracking unknown person, not ready to send yet", cameraName);
+                                    }
+                                }
+                        }
+                        } catch (Exception e) {
+                            log.error("Failed to process unknown person for camera '{}': {}", cameraName, e.getMessage(), e);
+                        }
+
+                        return; // Don't continue processing if no faces detected
                     }
 
                     // Filter out faces with score > 100
@@ -241,9 +327,6 @@ public class RtspRecognitionRunner {
                                 }
                             }
 
-                            // Compute image hash and check if this detection should be sent
-                            String imageHash = detectionHistoryService.computeImageHash(imageBytes);
-
                             // Use face tracking for ALL persons (both known and unknown)
                             // Track the face across multiple frames to determine true identity
                             if (!faces.isEmpty()) {
@@ -264,7 +347,7 @@ public class RtspRecognitionRunner {
                                     log.info("📊 CALLING TRACKING SERVICE: camera='{}', person='{}'", cameraName, firstFace.getPersonName());
 
                                     // Track face with current detection name and confidence score
-                                    FaceTrackingService.TrackingResult trackingResult = faceTrackingService.trackFace(
+                                    PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
                                             cameraName,
                                             firstFace.getPersonName(), // Pass current detection name
                                             firstFace.getFaceRect(),
@@ -278,61 +361,11 @@ public class RtspRecognitionRunner {
                                         trackingResult.getPersonName(),
                                         trackingResult.isShouldSend() ? String.format("%.2f", trackingResult.getBestConfidenceScore()) : "N/A");
 
+                                    // Note: Notification is sent by the tracking service when shouldSend=true
+                                    // We just log the result here
                                     if (trackingResult.isShouldSend()) {
-                                        log.info("✅ VERDICT REACHED! Starting notification process...");
-                                        // Face has been tracked through multiple frames with movement
-                                        // Use the determined identity (most common) and best score
-                                        String determinedIdentity = trackingResult.getPersonName();
-                                        boolean isUnknown = "Unknown".equalsIgnoreCase(determinedIdentity);
-
-                                        log.info("🎯 IDENTITY: '{}', isUnknown={}", determinedIdentity, isUnknown);
-
-                                        // Create scores map with determined identity and best score
-                                        Map<String, Double> bestScores = Map.of(determinedIdentity, trackingResult.getBestConfidenceScore());
-
-                                        // Use the BEST frame's image bytes (not current frame)
-                                        byte[] bestImageBytes = trackingResult.getBestImageBytes();
-
-                                        log.info("📷 IMAGE DATA: bestImageBytes={} bytes",
-                                            (bestImageBytes != null ? bestImageBytes.length : 0));
-
-                                        if (bestImageBytes == null || bestImageBytes.length == 0) {
-                                            log.error("❌ BLOCKED: Best image bytes is null or empty for camera '{}'", cameraName);
-                                        } else {
-                                            log.info("🔍 CHECKING DETECTION HISTORY...");
-
-                                            // Check if we recently sent this person (using appropriate method)
-                                            boolean shouldSend = isUnknown
-                                                    ? detectionHistoryService.shouldSendUnknownDetection(imageHash, determinedIdentity, cameraName, trackingResult.getBestFaceHash())
-                                                    : detectionHistoryService.shouldSendDetection(imageHash, determinedIdentity, cameraName, trackingResult.getBestFaceHash());
-
-                                            log.info("📊 COOLDOWN CHECK: shouldSend={}, isUnknown={}, identity='{}'",
-                                                shouldSend, isUnknown, determinedIdentity);
-
-                                            if (shouldSend) {
-                                                log.info("🚀 SENDING TO TELEGRAM: camera='{}', identity='{}', score={}, imageSize={} bytes",
-                                                    cameraName, determinedIdentity,
-                                                    String.format("%.2f", trackingResult.getBestConfidenceScore()),
-                                                    bestImageBytes.length);
-
-                                                try {
-                                                    // Send notification with BEST frame image and determined identity
-                                                    telegramPublisherService.publishDetection(bestImageBytes, bestScores, cameraName);
-
-                                                    log.info("✅ SUCCESS: Telegram notification sent for '{}'", determinedIdentity);
-
-                                                    // Mark as sent to prevent duplicates
-                                                    if (isUnknown) {
-                                                        detectionHistoryService.markUnknownDetectionAsSent(imageHash, determinedIdentity, cameraName, trackingResult.getBestFaceHash());
-                                                        log.debug("Marked unknown '{}' as sent", determinedIdentity);
-                                                    }
-                                                } catch (Exception telegramEx) {
-                                                    log.error("❌ TELEGRAM FAILED: {}", telegramEx.getMessage(), telegramEx);
-                                                }
-                                            } else {
-                                                log.info("⏭️ COOLDOWN: Skipping '{}' for camera '{}' (sent recently)", determinedIdentity, cameraName);
-                                            }
-                                        }
+                                        log.info("✅ VERDICT REACHED! Notification sent by tracking service for '{}'",
+                                            trackingResult.getPersonName());
                                     } else {
                                         log.debug("⏳ STILL TRACKING: camera='{}', not ready to send yet", cameraName);
                                     }
@@ -348,7 +381,7 @@ public class RtspRecognitionRunner {
 
                     } catch (Exception e) {
                         log.error("Error processing frame from camera '{}': {}", cameraName, e.getMessage(), e);
-                } finally {
+                    } finally {
                     try {
                         Mat detectionImg = null;
                         if (faceRecognition != null) {

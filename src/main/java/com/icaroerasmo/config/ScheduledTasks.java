@@ -4,7 +4,7 @@ import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.DetectionHistoryService;
 import com.icaroerasmo.service.FaceRecognitionService;
 import com.icaroerasmo.service.FaceRecognizerHolder;
-import com.icaroerasmo.service.FaceTrackingService;
+import com.icaroerasmo.service.PeopleTrackingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
@@ -28,7 +28,7 @@ public class ScheduledTasks {
     private final FaceRecognitionService faceRecognitionService;
     private final FaceRecognizerHolder faceRecognizerHolder;
     private final TrainingProperties trainingProperties;
-    private final FaceTrackingService faceTrackingService;
+    private final PeopleTrackingService peopleTrackingService;
 
     /**
      * Cleanup old detection records and face tracks every 10 minutes
@@ -36,9 +36,9 @@ public class ScheduledTasks {
      */
     @Scheduled(fixedRate = 10 * 60 * 1000) // 10 minutes
     public void cleanupDetectionHistory() {
-        log.debug("Running scheduled cleanup of detection history and face tracks");
+        log.debug("Running scheduled cleanup of detection history and people tracks");
         detectionHistoryService.cleanupOldRecords();
-        faceTrackingService.cleanupOldTracks();
+        peopleTrackingService.cleanupOldTracks();
     }
 
     /**
