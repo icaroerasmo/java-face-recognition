@@ -37,7 +37,7 @@ public class PersonDetectionService {
     private static final String PROTO_FILE = "opencv/SSD_MobileNet_prototxt.txt";
     private static final String MODEL_FILE = "opencv/SSD_MobileNet.caffemodel";
     private static final int INPUT_SIZE = 300;
-    private static final double CONFIDENCE_THRESHOLD = 0.6; // 60% confidence
+    private static final double CONFIDENCE_THRESHOLD = 0.7; // 70% confidence
 
     // Class index for "person" in MobileNet-SSD (COCO dataset)
     private static final int PERSON_CLASS_ID = 15;
