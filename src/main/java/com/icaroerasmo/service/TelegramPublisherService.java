@@ -74,6 +74,14 @@ public class TelegramPublisherService {
     private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName) {
         StringBuilder caption = new StringBuilder();
         caption.append("<b>Camera: ").append(cameraName).append("</b>\n");
+
+        // Find and display the lowest distance (best match)
+        double lowestDistance = detectedPeopleWithScores.values().stream()
+            .mapToDouble(Double::doubleValue)
+            .min()
+            .orElse(100.0);
+        caption.append("<b>Best Match Distance: ").append(String.format("%.2f", lowestDistance)).append("</b>\n\n");
+
         caption.append("<b>Detected:</b>\n");
 
         for (Map.Entry<String, Double> entry : detectedPeopleWithScores.entrySet()) {

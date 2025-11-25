@@ -201,6 +201,11 @@ public class RtspRecognitionRunner {
                             }
 
                             if (fullFrameBytes != null) {
+                                // Convert rectangles to PersonDetection objects (all unknown at this point)
+                                List<PeopleTrackingService.PersonDetection> allPeopleDetections = detectedPeople.stream()
+                                    .map(rect -> new PeopleTrackingService.PersonDetection("Unknown", rect))
+                                    .collect(java.util.stream.Collectors.toList());
+
                                 // Track EACH person individually
                                 for (int i = 0; i < detectedPeople.size(); i++) {
                                     Rect personRect = detectedPeople.get(i);
@@ -226,16 +231,16 @@ public class RtspRecognitionRunner {
                                         if (personRegion != null) matUtil.releaseResources(personRegion);
                                     }
 
-                                    // Track this person, passing ALL people rectangles for drawing
+                                    // Track this person, passing ALL people detections for drawing
                                     if (personHash != null) {
                                         PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
                                             cameraName,
                                             "Unknown Person",
                                             personRect,
                                             personHash,
-                                            100.0, // High confidence that it's unknown
+                                            100.0, // High distance that it's unknown
                                             fullFrameBytes,
-                                            detectedPeople // Pass ALL detected people rectangles for drawing
+                                            allPeopleDetections // Pass ALL detected people with names for drawing
                                         );
 
                                         // When this person's tracking is ready, notification will have ALL people highlighted
@@ -271,12 +276,19 @@ public class RtspRecognitionRunner {
                             .collect(Collectors.toMap(
                                     FaceRecognition.DetectedFaces::getPersonName,
                                     FaceRecognition.DetectedFaces::getDistance,
-                                    (existing, replacement) -> existing // Keep first if duplicate
+                                    (existing, replacement) -> Math.min(existing, replacement) // Keep lowest distance if duplicate
                             ));
+
+                    // Find the lowest distance score across all detections
+                    double lowestDistance = faces.stream()
+                            .mapToDouble(FaceRecognition.DetectedFaces::getDistance)
+                            .min()
+                            .orElse(100.0);
 
                     // Send notification for ALL detections with score <= 100 (recognized or Unknown)
                     String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
-                    log.info("Pessoas detectadas em '{}': {}", cameraName, namesStr);
+                    log.info("Pessoas detectadas em '{}': {} (lowest distance: {})",
+                            cameraName, namesStr, String.format("%.2f", lowestDistance));
 
                     // Publish to Telegram with detected people information
                     try {
@@ -296,10 +308,10 @@ public class RtspRecognitionRunner {
                             buf.deallocate();
                             jpgExt.deallocate();
 
-                            // Collect all face rectangles for drawing (computed once, used for all)
-                            List<Rect> allFaceRects = faces.stream()
-                                .map(FaceRecognition.DetectedFaces::getFaceRect)
-                                .filter(rect -> rect != null)
+                            // Create PersonDetection list with names and rectangles for ALL detected faces
+                            List<PeopleTrackingService.PersonDetection> allPeopleDetections = faces.stream()
+                                .filter(face -> face.getFaceRect() != null)
+                                .map(face -> new PeopleTrackingService.PersonDetection(face.getPersonName(), face.getFaceRect()))
                                 .collect(Collectors.toList());
 
                             // Track EACH detected face individually
@@ -356,7 +368,7 @@ public class RtspRecognitionRunner {
                                 log.info("📊 CALLING TRACKING SERVICE: camera='{}', face #{}, person='{}'",
                                     cameraName, faceIdx + 1, face.getPersonName());
 
-                                // Track this face with all face rectangles for drawing
+                                // Track this face with all people detections for drawing
                                 PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
                                     cameraName,
                                     face.getPersonName(), // This person's name
@@ -364,7 +376,7 @@ public class RtspRecognitionRunner {
                                     faceHash,             // This person's hash
                                     face.getDistance(),   // This person's distance
                                     imageBytes,           // Full frame image bytes
-                                    allFaceRects         // ALL detected face rectangles for drawing
+                                    allPeopleDetections  // ALL detected people with names and rectangles for drawing
                                 );
 
                                 log.info("📋 TRACKING RESULT: camera='{}', face #{}, shouldSend={}, personName={}, score={}",
@@ -377,7 +389,7 @@ public class RtspRecognitionRunner {
                                 // When this person's tracking is ready, notification will have ALL faces highlighted
                                 if (trackingResult.isShouldSend()) {
                                     log.info("✅ VERDICT REACHED! Face #{} tracked successfully - notification sent with {} faces highlighted for '{}'",
-                                        faceIdx + 1, allFaceRects.size(), trackingResult.getPersonName());
+                                        faceIdx + 1, allPeopleDetections.size(), trackingResult.getPersonName());
                                 } else {
                                     log.debug("⏳ STILL TRACKING: camera='{}', face #{} not ready to send yet",
                                         cameraName, faceIdx + 1);
