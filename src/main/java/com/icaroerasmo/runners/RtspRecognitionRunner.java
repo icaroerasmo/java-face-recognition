@@ -302,11 +302,11 @@ public class RtspRecognitionRunner {
                             buf.deallocate();
                             jpgExt.deallocate();
 
-                            // Create PersonDetection list with ONLY rectangles (no names yet)
-                            // The tracking service will determine the final identity and add the name before drawing
+                            // Create PersonDetection list with detected names and rectangles
+                            // Each frame's recognition results are preserved for tracking
                             List<PeopleTrackingService.PersonDetection> allPeopleDetections = faces.stream()
                                 .filter(face -> face.getFaceRect() != null)
-                                .map(face -> new PeopleTrackingService.PersonDetection(null, face.getFaceRect()))
+                                .map(face -> new PeopleTrackingService.PersonDetection(face.getPersonName(), face.getFaceRect()))
                                 .collect(Collectors.toList());
 
                             // Track EACH detected face individually

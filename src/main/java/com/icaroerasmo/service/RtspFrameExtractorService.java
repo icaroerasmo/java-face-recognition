@@ -82,7 +82,6 @@ public class RtspFrameExtractorService {
                 }
 
                 grabber.start();
-                log.info("Successfully started RTSP grabber with 30 FPS and optimized buffering for: {}", rtspUrl);
 
                 // Process frames using producer-consumer pattern with byte array storage
                 processFramesWithQueue(grabber, converter, rtspUrl, consumer);

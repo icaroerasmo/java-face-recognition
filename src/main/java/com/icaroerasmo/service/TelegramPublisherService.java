@@ -26,11 +26,11 @@ public class TelegramPublisherService {
      * - Recognized people: Image with person's name in caption
      * - Unknown people: Image with "Unknown Person" in caption
      */
-    public void publishDetection(byte[] imageBytes, Map<String, Double> detectedPeopleWithScores, String cameraName) {
+    public void publishDetection(byte[] imageBytes, Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
 
         try {
-            log.info("publishDetection called: cameraName={}, imageBytes={}, detectedPeople={}",
-                cameraName, (imageBytes != null ? imageBytes.length : 0), detectedPeopleWithScores.keySet());
+            log.info("publishDetection called: cameraName={}, imageBytes={}, detectedPeople={}, identityFrameCount={}, totalTrackedFrames={}",
+                cameraName, (imageBytes != null ? imageBytes.length : 0), detectedPeopleWithScores.keySet(), identityFrameCount, totalTrackedFrames);
 
             if (telegramBot == null) {
                 log.error("FATAL: Telegram bot is not initialized!");
@@ -43,7 +43,7 @@ public class TelegramPublisherService {
             }
 
             // Build caption with detected people info
-            String caption = buildCaption(detectedPeopleWithScores, cameraName);
+            String caption = buildCaption(detectedPeopleWithScores, cameraName, identityFrameCount, totalTrackedFrames);
 
             log.info("Sending photo to Telegram: chatId={}, caption={}", telegramProperties.getChatId(), caption);
 
@@ -71,7 +71,7 @@ public class TelegramPublisherService {
     /**
      * Builds a caption for the Telegram message with detected people information
      */
-    private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName) {
+    private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
         StringBuilder caption = new StringBuilder();
         caption.append("<b>Camera: ").append(cameraName).append("</b>\n");
 
@@ -80,7 +80,9 @@ public class TelegramPublisherService {
             .mapToDouble(Double::doubleValue)
             .min()
             .orElse(100.0);
-        caption.append("<b>Best Match Distance: ").append(String.format("%.2f", lowestDistance)).append("</b>\n\n");
+        caption.append("<b>Best Match Distance: ").append(String.format("%.2f", lowestDistance)).append("</b>\n");
+        caption.append("<b>Frames Where Person Was Identified: ").append(identityFrameCount).append("</b>\n");
+        caption.append("<b>Total Frames Tracked: ").append(totalTrackedFrames).append("</b>\n\n");
 
         caption.append("<b>Detected:</b>\n");
 
