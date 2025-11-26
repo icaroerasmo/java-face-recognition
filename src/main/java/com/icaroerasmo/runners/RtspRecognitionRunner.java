@@ -235,7 +235,7 @@ public class RtspRecognitionRunner {
                                     if (personHash != null) {
                                         PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
                                             cameraName,
-                                            "Unknown Person",
+                                            "Unknown",
                                             personRect,
                                             personHash,
                                             100.0, // High distance that it's unknown

@@ -682,12 +682,20 @@ public class PeopleTrackingService {
                 return new IdentityResult(bestKnownPerson, bestKnownCount);
             }
 
-            // No known person reached 3% threshold, check if Unknown is the most common
-            int unknownCount = identityCounts.getOrDefault("Unknown", 0);
-            log.info("❌ VERDICT: No known person reached 5% threshold ({} frames). Unknown appeared in {} frames ({}%) out of {} observations - classifying as Unknown",
-                minThreshold, unknownCount, String.format("%.1f", (unknownCount * 100.0) / totalObservations), totalObservations);
+            // No known person reached 5% threshold, return Unknown with total frame count of other identities
+            // Count all frames that are not Unknown
+            int totalUnknownCount = 0;
+            for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
+                String name = entry.getKey();
+                if (!"Unknown".equalsIgnoreCase(name)) {
+                    totalUnknownCount += entry.getValue();
+                }
+            }
 
-            return new IdentityResult("Unknown", unknownCount);
+            log.info("❌ VERDICT: No known person reached 5% threshold ({} frames). Unknown appeared in {} frames ({}%) out of {} observations - classifying as Unknown",
+                minThreshold, totalUnknownCount, String.format("%.1f", (totalUnknownCount * 100.0) / totalObservations), totalObservations);
+
+            return new IdentityResult("Unknown", totalUnknownCount);
         }
 
 
