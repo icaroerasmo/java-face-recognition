@@ -27,6 +27,7 @@ public class PeopleTrackingService {
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
     private final MatUtil matUtil;
+    private final GifCreationService gifCreationService;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
 
     // Track people per camera
@@ -37,10 +38,12 @@ public class PeopleTrackingService {
 
     public PeopleTrackingService(TelegramPublisherService telegramPublisherService,
                                DetectionHistoryService detectionHistoryService,
-                               MatUtil matUtil) {
+                               MatUtil matUtil,
+                               GifCreationService gifCreationService) {
         this.telegramPublisherService = telegramPublisherService;
         this.detectionHistoryService = detectionHistoryService;
         this.matUtil = matUtil;
+        this.gifCreationService = gifCreationService;
     }
 
     @PreDestroy
@@ -58,8 +61,8 @@ public class PeopleTrackingService {
     }
 
     // Minimum number of frames to track before sending notification
-    // Reduced to 3 seconds of frames (90 frames at 30fps) to better handle people turning away
-    private static final int MIN_TRACKING_FRAMES = (int) (Constants.FPS * 3);
+    // 5 seconds of frames (150 frames at 30fps) to better handle people turning away
+    private static final int MIN_TRACKING_FRAMES = (int) (Constants.FPS * 5);
 
     // Maximum time to track a person (20 seconds to handle people turning/walking away)
     private static final long MAX_TRACKING_TIME_MS = 20 * 1000;
@@ -135,9 +138,10 @@ public class PeopleTrackingService {
                 double bestScore = track.getBestDistance();
                 byte[] bestImageBytes = track.getBestImageBytes();
                 List<PersonDetection> bestAllPeople = track.getBestAllPeople();
+                List<byte[]> allFrameImages = track.getAllFrameImages();
 
                 // Send notification with identity frame count and total tracked frames
-                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount);
+                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
 
                 // Remove from tracking and cleanup
                 cameraTrackedPeople.remove(track);
@@ -154,14 +158,17 @@ public class PeopleTrackingService {
     /**
      * Send notification immediately with cooldown check.
      * Draws rectangles around ALL detected people in the image with their corresponding names before sending.
+     * After sending the notification, creates and sends a GIF of all tracked frames.
      */
     private void sendNotificationNow(String cameraName, String determinedIdentity, double bestScore,
-                                     byte[] bestImageBytes, byte[] bestFaceHash, List<PersonDetection> allPeople, int identityFrameCount, int totalTrackedFrames) {
+                                     byte[] bestImageBytes, byte[] bestFaceHash, List<PersonDetection> allPeople,
+                                     int identityFrameCount, int totalTrackedFrames, List<byte[]> allFrameImages) {
         Mat annotatedImg = null;
         try {
-            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}, people count={}, identityFrames={}, totalFrames={}",
+            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}, people count={}, identityFrames={}, totalFrames={}, totalFrameImages={}",
                 cameraName, determinedIdentity, String.format("%.2f", bestScore),
-                allPeople != null ? allPeople.size() : 0, identityFrameCount, totalTrackedFrames);
+                allPeople != null ? allPeople.size() : 0, identityFrameCount, totalTrackedFrames,
+                allFrameImages != null ? allFrameImages.size() : 0);
 
             if (bestImageBytes == null || bestImageBytes.length == 0) {
                 log.error("Cannot send notification: image bytes is null or empty");
@@ -242,6 +249,38 @@ public class PeopleTrackingService {
                 if (isUnknown) {
                     detectionHistoryService.markUnknownDetectionAsSent(imageHash, determinedIdentity, cameraName, bestFaceHash);
                 }
+
+                // Create and send GIF animation after the main notification
+                // Only create GIF if we have at least 10 frames for meaningful animation
+                if (allFrameImages != null && allFrameImages.size() >= 10) {
+                    log.info("📹 Creating GIF from {} tracked frames for '{}'", allFrameImages.size(), determinedIdentity);
+
+                    // Create GIF in a separate thread to not block
+                    new Thread(() -> {
+                        try {
+                            byte[] gifBytes = gifCreationService.createGif(allFrameImages);
+                            if (gifBytes != null && gifBytes.length > 0) {
+                                String gifCaption = String.format(
+                                    "<b>Tracking Animation</b>\n" +
+                                    "<b>Camera:</b> %s\n" +
+                                    "<b>Person:</b> %s\n" +
+                                    "<b>Frames:</b> %d\n" +
+                                    "<b>Duration:</b> ~%.1f seconds",
+                                    cameraName, determinedIdentity, allFrameImages.size(),
+                                    allFrameImages.size() * 0.1 // 100ms per frame = 0.1s
+                                );
+                                telegramPublisherService.sendAnimation(gifBytes, gifCaption, cameraName);
+                            } else {
+                                log.warn("Failed to create GIF for '{}' - no bytes generated", determinedIdentity);
+                            }
+                        } catch (Exception e) {
+                            log.error("Error creating/sending GIF for '{}': {}", determinedIdentity, e.getMessage(), e);
+                        }
+                    }, "GIF-Creator-" + cameraName).start();
+                } else {
+                    log.debug("Skipping GIF creation - not enough frames (have: {})",
+                        allFrameImages != null ? allFrameImages.size() : 0);
+                }
             } else {
                 log.info("⏭️ SKIPPING: '{}' already sent recently for camera '{}'", determinedIdentity, cameraName);
             }
@@ -319,9 +358,10 @@ public class PeopleTrackingService {
                     double bestScore = matchedTrack.getBestDistance();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
                     List<PersonDetection> bestAllPeople = matchedTrack.getBestAllPeople();
+                    List<byte[]> allFrameImages = matchedTrack.getAllFrameImages();
 
                     // Send notification immediately with identity frame count and total tracked frames
-                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount);
+                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
 
                     // Remove from tracking and cleanup resources
                     cameraTrackedPeople.remove(matchedTrack);
@@ -357,9 +397,10 @@ public class PeopleTrackingService {
                     double bestScore = matchedTrack.getBestDistance();
                     byte[] bestImageBytes = matchedTrack.getBestImageBytes();
                     List<PersonDetection> bestAllPeople = matchedTrack.getBestAllPeople();
+                    List<byte[]> allFrameImages = matchedTrack.getAllFrameImages();
 
                     // Send notification with identity frame count and total tracked frames
-                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount);
+                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
 
                     cameraTrackedPeople.remove(matchedTrack);
                     matchedTrack.cleanup();
@@ -609,6 +650,19 @@ public class PeopleTrackingService {
 
         public byte[] getBestImageBytes() {
             return bestObservation != null ? bestObservation.imageBytes : null;
+        }
+
+        /**
+         * Get all frame images from observations for GIF creation
+         */
+        public List<byte[]> getAllFrameImages() {
+            List<byte[]> allImages = new ArrayList<>();
+            for (FaceObservation observation : observations) {
+                if (observation.imageBytes != null) {
+                    allImages.add(observation.imageBytes);
+                }
+            }
+            return allImages;
         }
 
         /**

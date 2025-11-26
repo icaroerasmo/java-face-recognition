@@ -3,6 +3,7 @@ package com.icaroerasmo.utils;
 import org.bytedeco.opencv.opencv_core.*;
 import org.springframework.stereotype.Component;
 
+import java.awt.image.DataBufferByte;
 import java.util.Arrays;
 
 import static org.bytedeco.opencv.global.opencv_imgproc.*;
@@ -58,5 +59,39 @@ public class MatUtil {
             images.deallocate();
         }
 
+    }
+
+    /**
+     * Convert OpenCV Mat to Java BufferedImage
+     * Used for GIF creation
+     */
+    public java.awt.image.BufferedImage matToBufferedImage(Mat mat) {
+        if (mat == null || mat.empty()) {
+            return null;
+        }
+
+        int width = mat.cols();
+        int height = mat.rows();
+        int channels = mat.channels();
+
+        byte[] sourcePixels = new byte[width * height * channels];
+        mat.data().get(sourcePixels);
+
+        java.awt.image.BufferedImage image;
+        if (channels == 3) {
+            // BGR to RGB conversion
+            image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_3BYTE_BGR);
+            final byte[] targetPixels = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+            System.arraycopy(sourcePixels, 0, targetPixels, 0, sourcePixels.length);
+        } else if (channels == 1) {
+            // Grayscale
+            image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
+            final byte[] targetPixels = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
+            System.arraycopy(sourcePixels, 0, targetPixels, 0, sourcePixels.length);
+        } else {
+            return null;
+        }
+
+        return image;
     }
 }

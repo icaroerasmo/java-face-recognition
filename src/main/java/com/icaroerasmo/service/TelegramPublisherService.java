@@ -4,6 +4,7 @@ package com.icaroerasmo.service;
 import com.icaroerasmo.properties.TelegramProperties;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.model.request.ParseMode;
+import com.pengrad.telegrambot.request.SendAnimation;
 import com.pengrad.telegrambot.request.SendMessage;
 import com.pengrad.telegrambot.request.SendPhoto;
 import com.pengrad.telegrambot.response.SendResponse;
@@ -125,6 +126,42 @@ public class TelegramPublisherService {
 
         } catch (Exception e) {
             log.warn("Error sending text message to Telegram: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Sends a GIF animation to Telegram
+     */
+    public void sendAnimation(byte[] gifBytes, String caption, String cameraName) {
+        try {
+            if (telegramBot == null) {
+                log.error("Telegram bot is not initialized. Cannot send animation");
+                return;
+            }
+
+            if (gifBytes == null || gifBytes.length == 0) {
+                log.error("Cannot send animation: GIF bytes is null or empty");
+                return;
+            }
+
+            log.info("Sending GIF animation to Telegram: chatId={}, size={} bytes, caption={}",
+                telegramProperties.getChatId(), gifBytes.length, caption);
+
+            SendAnimation sendAnimation = new SendAnimation(telegramProperties.getChatId(), gifBytes)
+                    .caption(caption)
+                    .parseMode(ParseMode.HTML);
+
+            SendResponse response = telegramBot.execute(sendAnimation);
+
+            if (response.isOk()) {
+                log.info("✅ Successfully sent GIF animation to Telegram for camera '{}'", cameraName);
+            } else {
+                log.error("Failed to send GIF to Telegram: {} (error code: {})",
+                    response.description(), response.errorCode());
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Failed to send GIF animation to Telegram: {}", e.getMessage(), e);
         }
     }
 }
