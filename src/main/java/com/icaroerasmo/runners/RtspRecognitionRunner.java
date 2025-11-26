@@ -292,26 +292,21 @@ public class RtspRecognitionRunner {
 
                     // Publish to Telegram with detected people information
                     try {
-                            Mat finalImg = img.clone();
-                            faces.forEach(output -> {
-                                if (output.getFaceRect() != null && output.getPersonName() != null) {
-                                    matUtil.drawRectangleAndName(finalImg, output.getPersonName(), output.getFaceRect());
-                                }
-                            });
-
-                            // Convert Mat to byte array using imencode (used for all faces)
+                            // Convert Mat to byte array WITHOUT drawing rectangles yet
+                            // Drawing will happen in PeopleTrackingService after person is tracked across frames
                             org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
                             org.bytedeco.javacpp.BytePointer jpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
-                            org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, finalImg, buf);
+                            org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, img, buf);
                             byte[] imageBytes = new byte[(int) buf.limit()];
                             buf.get(imageBytes);
                             buf.deallocate();
                             jpgExt.deallocate();
 
-                            // Create PersonDetection list with names and rectangles for ALL detected faces
+                            // Create PersonDetection list with ONLY rectangles (no names yet)
+                            // The tracking service will determine the final identity and add the name before drawing
                             List<PeopleTrackingService.PersonDetection> allPeopleDetections = faces.stream()
                                 .filter(face -> face.getFaceRect() != null)
-                                .map(face -> new PeopleTrackingService.PersonDetection(face.getPersonName(), face.getFaceRect()))
+                                .map(face -> new PeopleTrackingService.PersonDetection(null, face.getFaceRect()))
                                 .collect(Collectors.toList());
 
                             // Track EACH detected face individually
@@ -400,7 +395,6 @@ public class RtspRecognitionRunner {
                                 log.debug("📭 NO FACES: Skipping frame from camera '{}'", cameraName);
                             }
 
-                            matUtil.releaseResources(finalImg);
                         } catch (Exception e) {
                             log.error("Failed to publish detection to Telegram for camera '{}': {}", cameraName, e.getMessage(), e);
                         }

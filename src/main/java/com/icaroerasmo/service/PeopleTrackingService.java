@@ -180,23 +180,22 @@ public class PeopleTrackingService {
             annotatedImg = originalImg.clone();
             matUtil.releaseResources(originalImg); // Release original, keep annotated
 
-            // Draw rectangles around ALL detected people with their respective names
+            // Draw rectangles around ALL detected people using the DETERMINED identity from tracking
+            // Since tracking happens per person, we only draw for the person being tracked
             if (allPeople != null && !allPeople.isEmpty()) {
+                // Use the determined identity (the result of tracking, not frame detection)
+                String displayName = determinedIdentity;
+
                 for (PersonDetection person : allPeople) {
                     if (person != null && person.getRect() != null) {
-                        // Normalize "Unknown Person" to just "Unknown"
-                        String displayName = person.getPersonName();
-                        if (displayName != null && displayName.toLowerCase().contains("unknown")) {
-                            displayName = "Unknown";
-                        }
-
+                        // Draw rectangle with the FINAL determined identity (after tracking)
                         matUtil.drawRectangleAndName(annotatedImg, displayName, person.getRect());
-                        log.debug("Drew rectangle for '{}' at ({}, {}, {}, {})",
+                        log.debug("Drew rectangle for DETERMINED identity '{}' at ({}, {}, {}, {})",
                             displayName, person.getRect().x(), person.getRect().y(),
                             person.getRect().width(), person.getRect().height());
                     }
                 }
-                log.info("Drew {} rectangles with individual names", allPeople.size());
+                log.info("Drew {} rectangle(s) with determined identity: '{}'", allPeople.size(), displayName);
             }
 
             // Convert annotated image back to bytes
