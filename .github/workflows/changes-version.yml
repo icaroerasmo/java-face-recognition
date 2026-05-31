@@ -1,0 +1,37 @@
+name: Changes version on release branches
+
+on:
+  create:
+    branches:
+      - 'release/*'
+
+jobs:
+  change-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Extract release version
+        id: extractTag
+        run: |
+          echo "TAG_NAME=$(basename "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+          echo "TAG_NAME=$(basename "$GITHUB_REF_NAME")"
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Change version
+        run: mvn versions:set -DnewVersion=${{ steps.extractTag.outputs.TAG_NAME }} -DprocessAllModules -DgenerateBackupPoms=false
+      - name: Commit version change
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          file_pattern: 'pom.xml'
+          commit_message: 'CI: Version bump to ${{ steps.extractTag.outputs.TAG_NAME }}'
