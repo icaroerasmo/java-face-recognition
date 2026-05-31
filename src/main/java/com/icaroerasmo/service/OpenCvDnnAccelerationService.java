@@ -59,7 +59,7 @@ public class OpenCvDnnAccelerationService {
 
     public void configure(Net net, String modelName) {
         AccelerationProperties.Backend backend = resolveBackend();
-        AccelerationProperties.Target target = resolveTarget(backend);
+        AccelerationProperties.Target target = resolveTarget(backend, modelName);
 
         try {
             net.setPreferableBackend(toBackendConstant(backend));
@@ -101,8 +101,8 @@ public class OpenCvDnnAccelerationService {
         return configured;
     }
 
-    private AccelerationProperties.Target resolveTarget(AccelerationProperties.Backend backend) {
-        AccelerationProperties.Target configured = accelerationProperties.getTarget();
+    private AccelerationProperties.Target resolveTarget(AccelerationProperties.Backend backend, String modelName) {
+        AccelerationProperties.Target configured = resolveConfiguredTarget(modelName);
         if (configured == null || configured == AccelerationProperties.Target.AUTO) {
             if (backend == AccelerationProperties.Backend.CUDA && cudaSupported) {
                 return AccelerationProperties.Target.CUDA_FP16;
@@ -124,6 +124,21 @@ public class OpenCvDnnAccelerationService {
         }
 
         return configured;
+    }
+
+    private AccelerationProperties.Target resolveConfiguredTarget(String modelName) {
+        if (modelName == null) {
+            return accelerationProperties.getTarget();
+        }
+
+        String normalizedModelName = modelName.toLowerCase(Locale.ROOT);
+        if (normalizedModelName.contains("person")) {
+            return accelerationProperties.getPersonDetectionTarget();
+        }
+        if (normalizedModelName.contains("face")) {
+            return accelerationProperties.getFaceDetectionTarget();
+        }
+        return accelerationProperties.getTarget();
     }
 
     private AccelerationProperties.Backend fallbackBackend(String reason) {

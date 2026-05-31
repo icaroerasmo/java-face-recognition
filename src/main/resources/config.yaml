@@ -11,6 +11,8 @@ face-recognition:
   acceleration:
     backend: "auto"
     target: "auto"
+    face-detection-target: "auto"
+    person-detection-target: "cpu"
     enable-opencl: true
     fallback-to-cpu: true
   telegram:

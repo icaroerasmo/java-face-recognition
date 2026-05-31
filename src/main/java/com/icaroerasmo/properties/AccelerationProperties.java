@@ -13,6 +13,8 @@ public class AccelerationProperties {
 
     private Backend backend = Backend.AUTO;
     private Target target = Target.AUTO;
+    private Target faceDetectionTarget = Target.AUTO;
+    private Target personDetectionTarget = Target.CPU;
     private boolean fallbackToCpu = true;
     private boolean enableOpencl = true;
 
