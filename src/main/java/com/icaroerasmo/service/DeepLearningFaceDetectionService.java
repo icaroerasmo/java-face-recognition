@@ -1,7 +1,6 @@
 package com.icaroerasmo.service;
 
 import com.icaroerasmo.utils.MatUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 
@@ -46,28 +45,42 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  */
 @Log4j2
 @Service
-@RequiredArgsConstructor
 public class DeepLearningFaceDetectionService {
 
     public static final int MODEL_INPUT_SIZE = 300;
     private static final String PROTO_FILE = "opencv/deploy.prototxt";
     private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
-    private static Net net = null;
 
     private final MatUtil matUtil;
+    private final String protoPath;
+    private final String caffeModelPath;
+    private final ThreadLocal<Net> netHolder;
 
-    static {
+    public DeepLearningFaceDetectionService(
+        MatUtil matUtil,
+        OpenCvDnnAccelerationService openCvDnnAccelerationService
+    ) {
+        this.matUtil = matUtil;
         try {
-            String protoPath = getResourcePath(PROTO_FILE);
-            String caffeModelPath = getResourcePath(CAFFE_MODEL_FILE);
-
-            log.info("Loading face detection model from: {} and {}", protoPath, caffeModelPath);
-            net = readNetFromCaffe(protoPath, caffeModelPath);
-            log.info("Face detection model loaded successfully");
+            this.protoPath = getResourcePath(PROTO_FILE);
+            this.caffeModelPath = getResourcePath(CAFFE_MODEL_FILE);
         } catch (Exception e) {
             log.error("Failed to load face detection model", e);
             throw new RuntimeException("Failed to initialize face detection model", e);
         }
+
+        this.netHolder = ThreadLocal.withInitial(() -> createNet(openCvDnnAccelerationService));
+    }
+
+    private Net createNet(OpenCvDnnAccelerationService openCvDnnAccelerationService) {
+        log.info("Loading face detection model from: {} and {}", protoPath, caffeModelPath);
+        Net net = readNetFromCaffe(protoPath, caffeModelPath);
+        if (net == null || net.empty()) {
+            throw new IllegalStateException("Failed to load face detection model");
+        }
+        openCvDnnAccelerationService.configure(net, "face detection");
+        log.info("Face detection model loaded successfully");
+        return net;
     }
 
     /**
@@ -110,11 +123,9 @@ public class DeepLearningFaceDetectionService {
     }
 
     /**
-     * Detect faces in an image.
-     * THREAD-SAFE: Synchronized to prevent concurrent access to the shared Net object,
-     * which was causing false detections when multiple cameras were processing frames simultaneously.
+     * Detect faces in an image using a per-thread Net instance.
      */
-    public synchronized List<Rect> detect(Mat testImage) {
+    public List<Rect> detect(Mat testImage) {
         List<Rect> faces = new ArrayList<>();
 
         // Validate input
@@ -160,7 +171,7 @@ public class DeepLearningFaceDetectionService {
                 return faces;
             }
 
-            // CRITICAL: These operations on shared 'net' object must be atomic
+            Net net = netHolder.get();
             net.setInput(blob);
             output = net.forward();
 

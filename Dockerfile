@@ -6,6 +6,7 @@ RUN mvn clean package
 
 FROM eclipse-temurin:21-jre-jammy
 ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_TOOL_OPTIONS="--enable-native-access=ALL-UNNAMED"
 WORKDIR /app
 
 # Update package lists and install required native dependencies for OpenCV/JavaCV
@@ -34,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     libtiff5 \
     libpython3.10 \
+    ocl-icd-libopencl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set timezone

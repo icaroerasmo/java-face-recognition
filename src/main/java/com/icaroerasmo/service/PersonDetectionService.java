@@ -1,7 +1,6 @@
 package com.icaroerasmo.service;
 
 import com.icaroerasmo.utils.MatUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 import org.bytedeco.opencv.opencv_core.*;
@@ -31,7 +30,6 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  */
 @Log4j2
 @Service
-@RequiredArgsConstructor
 public class PersonDetectionService {
 
     private static final String PROTO_FILE = "opencv/SSD_MobileNet_prototxt.txt";
@@ -46,26 +44,38 @@ public class PersonDetectionService {
     private static final double SCALE_FACTOR = 0.007843; // 1/127.5
     // Mean values: 127.5 for each channel (created per use to avoid memory leak)
 
-    private static Net net = null;
     private final MatUtil matUtil;
+    private final String protoPath;
+    private final String modelPath;
+    private final ThreadLocal<Net> netHolder;
 
-    static {
+    public PersonDetectionService(
+        MatUtil matUtil,
+        OpenCvDnnAccelerationService openCvDnnAccelerationService
+    ) {
+        this.matUtil = matUtil;
         try {
-            String protoPath = getResourcePath(PROTO_FILE);
-            String modelPath = getResourcePath(MODEL_FILE);
-
-            log.info("Loading person detection model from: {} and {}", protoPath, modelPath);
-            net = readNetFromCaffe(protoPath, modelPath);
-
-            if (net == null || net.empty()) {
-                throw new IllegalStateException("Failed to load network - network is null or empty");
-            }
-
-            log.info("Person detection model loaded successfully");
+            this.protoPath = getResourcePath(PROTO_FILE);
+            this.modelPath = getResourcePath(MODEL_FILE);
         } catch (Exception e) {
             log.error("Failed to load person detection model: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to initialize person detection model", e);
         }
+
+        this.netHolder = ThreadLocal.withInitial(() -> createNet(openCvDnnAccelerationService));
+    }
+
+    private Net createNet(OpenCvDnnAccelerationService openCvDnnAccelerationService) {
+        log.info("Loading person detection model from: {} and {}", protoPath, modelPath);
+        Net net = readNetFromCaffe(protoPath, modelPath);
+
+        if (net == null || net.empty()) {
+            throw new IllegalStateException("Failed to load network - network is null or empty");
+        }
+
+        openCvDnnAccelerationService.configure(net, "person detection");
+        log.info("Person detection model loaded successfully");
+        return net;
     }
 
     /**
@@ -108,13 +118,12 @@ public class PersonDetectionService {
     }
 
     /**
-     * Detect people in an image.
-     * THREAD-SAFE: Synchronized to prevent concurrent access to the shared Net object.
+     * Detect people in an image using a per-thread Net instance.
      *
      * @param image Input image
      * @return List of rectangles representing detected people
      */
-    public synchronized List<Rect> detectPeople(Mat image) {
+    public List<Rect> detectPeople(Mat image) {
         List<Rect> people = new ArrayList<>();
 
         // Validate input
@@ -163,7 +172,7 @@ public class PersonDetectionService {
                 return people;
             }
 
-            // Run forward pass
+            Net net = netHolder.get();
             net.setInput(blob);
             output = net.forward();
 

@@ -8,6 +8,11 @@ face-recognition:
   training:
     dataset-path: "trained_dataset.xml"
     root-folder: "train"
+  acceleration:
+    backend: "auto"
+    target: "auto"
+    enable-opencl: true
+    fallback-to-cpu: true
   telegram:
     # Bot token from Telegram BotFather - set this in config/config.yaml or environment variable
     bot-token: "${TELEGRAM_BOT_TOKEN:}"
