@@ -1,7 +1,8 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.properties.AccelerationProperties;
+import com.icaroerasmo.properties.FaceRecognitionProperties;
 import com.icaroerasmo.utils.MatUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 import org.bytedeco.opencv.opencv_core.*;
@@ -31,7 +32,6 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  */
 @Log4j2
 @Service
-@RequiredArgsConstructor
 public class PersonDetectionService {
 
     private static final String PROTO_FILE = "opencv/SSD_MobileNet_prototxt.txt";
@@ -46,18 +46,26 @@ public class PersonDetectionService {
     private static final double SCALE_FACTOR = 0.007843; // 1/127.5
     // Mean values: 127.5 for each channel (created per use to avoid memory leak)
 
-    private static Net net = null;
+    private final Net net;
     private final MatUtil matUtil;
 
-    static {
+    public PersonDetectionService(MatUtil matUtil, FaceRecognitionProperties faceRecognitionProperties) {
+        this.matUtil = matUtil;
         try {
             String protoPath = getResourcePath(PROTO_FILE);
             String modelPath = getResourcePath(MODEL_FILE);
 
             log.info("Loading person detection model from: {} and {}", protoPath, modelPath);
-            net = readNetFromCaffe(protoPath, modelPath);
+            this.net = readNetFromCaffe(protoPath, modelPath);
+            configureNet(
+                    this.net,
+                    faceRecognitionProperties.getAcceleration().getBackend(),
+                    faceRecognitionProperties.getAcceleration().getPersonDetectionTarget(),
+                    faceRecognitionProperties.getAcceleration().isFallbackToCpu(),
+                    "person detection"
+            );
 
-            if (net == null || net.empty()) {
+            if (this.net == null || this.net.empty()) {
                 throw new IllegalStateException("Failed to load network - network is null or empty");
             }
 
@@ -127,25 +135,16 @@ public class PersonDetectionService {
         int originalWidth = image.size().width();
         int originalHeight = image.size().height();
 
-        Mat clonedImage = null, resizedImage = null, blob = null, output = null, detectionMat = null;
+        Mat resizedImage = null, blob = null, output = null, detectionMat = null;
         FloatIndexer indexer = null;
         Size inputSize = null, blobSize = null;
         Scalar meanValues = null;
 
         try {
-            // Clone the input image to avoid ANY modifications to original
-            clonedImage = new Mat();
-            image.copyTo(clonedImage);
-
-            if (clonedImage.empty()) {
-                log.warn("Failed to clone input image for person detection");
-                return people;
-            }
-
             // Resize image to model input size
             resizedImage = new Mat();
             inputSize = new Size(INPUT_SIZE, INPUT_SIZE);
-            resize(clonedImage, resizedImage, inputSize);
+            resize(image, resizedImage, inputSize);
 
             if (resizedImage.empty()) {
                 log.warn("Failed to resize image for person detection");
@@ -261,7 +260,7 @@ public class PersonDetectionService {
                 }
             }
             // Release Mat resources
-            matUtil.releaseResources(clonedImage, resizedImage, blob, output, detectionMat);
+            matUtil.releaseResources(resizedImage, blob, output, detectionMat);
         }
 
         return people;
@@ -277,5 +276,45 @@ public class PersonDetectionService {
     public boolean hasPeople(Mat image) {
         List<Rect> people = detectPeople(image);
         return !people.isEmpty();
+    }
+
+    private static void configureNet(
+            Net net,
+            AccelerationProperties.Backend backend,
+            AccelerationProperties.Target target,
+            boolean fallbackToCpu,
+            String modelName
+    ) {
+        try {
+            if (backend != null && backend != AccelerationProperties.Backend.AUTO) {
+                net.setPreferableBackend(mapBackend(backend));
+            }
+            if (target != null && target != AccelerationProperties.Target.AUTO) {
+                net.setPreferableTarget(mapTarget(target));
+            }
+            log.info("Configured {} DNN backend={} target={}", modelName, backend, target);
+        } catch (Exception e) {
+            if (!fallbackToCpu) {
+                throw e;
+            }
+            log.warn("Failed to configure {} acceleration (backend={}, target={}), falling back to CPU: {}",
+                    modelName, backend, target, e.getMessage());
+            net.setPreferableBackend(DNN_BACKEND_OPENCV);
+            net.setPreferableTarget(DNN_TARGET_CPU);
+        }
+    }
+
+    private static int mapBackend(AccelerationProperties.Backend backend) {
+        return switch (backend) {
+            case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
+        };
+    }
+
+    private static int mapTarget(AccelerationProperties.Target target) {
+        return switch (target) {
+            case AUTO, CPU -> DNN_TARGET_CPU;
+            case OPENCL -> DNN_TARGET_OPENCL;
+            case OPENCL_FP16 -> DNN_TARGET_OPENCL_FP16;
+        };
     }
 }

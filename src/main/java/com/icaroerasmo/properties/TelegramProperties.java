@@ -12,4 +12,6 @@ public class TelegramProperties {
     private String botToken;
     // Telegram chat ID to send notifications to
     private String chatId;
+    // Animation FPS for Telegram MP4/GIF previews
+    private int gifFps = 10;
 }

@@ -11,7 +11,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.icaroerasmo.com</groupId>
   <artifactId>rtsp-face-recognition</artifactId>
-  <version>0.0.1</version>
+  <version>0.1.0</version>
   <name>Archetype - rtsp-face-recognition</name>
   <url>http://maven.apache.org</url>
 
@@ -21,6 +21,7 @@
     <java.version>21</java.version>
     <maven.compiler.source>21</maven.compiler.source>
     <maven.compiler.target>21</maven.compiler.target>
+    <lombok.version>1.18.38</lombok.version>
   </properties>
 
   <dependencies>
@@ -61,13 +62,8 @@
     <dependency>
       <groupId>org.projectlombok</groupId>
       <artifactId>lombok</artifactId>
+      <version>${lombok.version}</version>
       <scope>provided</scope>
-    </dependency>
-    <!-- Telegram Bot API -->
-    <dependency>
-      <groupId>com.github.pengrad</groupId>
-      <artifactId>java-telegram-bot-api</artifactId>
-      <version>7.9.1</version>
     </dependency>
     <!-- JSON processing (already included via spring-boot-starter-web) -->
     <dependency>
@@ -95,7 +91,7 @@
             <path>
               <groupId>org.projectlombok</groupId>
               <artifactId>lombok</artifactId>
-              <version>1.18.30</version>
+              <version>${lombok.version}</version>
             </path>
           </annotationProcessorPaths>
         </configuration>
