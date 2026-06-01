@@ -1,5 +1,6 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.properties.FaceRecognitionProperties;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
@@ -19,10 +20,10 @@ import java.util.List;
 public class GifCreationService {
 
     private final MatUtil matUtil;
+    private final FaceRecognitionProperties faceRecognitionProperties;
 
     // GIF parameters
     private static final int GIF_WIDTH = 640; // Resize frames to this width for smaller file size
-    private static final int GIF_FRAME_DELAY_MS = 100; // 100ms between frames = 10 fps
     private static final int MAX_FRAMES = 100; // Limit GIF to max 100 frames to keep file size reasonable
     private static final int MIN_FRAMES = 10; // Minimum frames required to create a meaningful GIF
 
@@ -77,6 +78,7 @@ public class GifCreationService {
     private byte[] createVideoMp4(List<byte[]> frameImages) {
         org.bytedeco.javacv.FFmpegFrameRecorder recorder = null;
         org.bytedeco.javacv.Java2DFrameConverter converter = new org.bytedeco.javacv.Java2DFrameConverter();
+        int gifFps = getGifFps();
 
         try {
             // Get dimensions from first frame
@@ -103,7 +105,7 @@ public class GifCreationService {
             matUtil.releaseResources(firstFrame);
 
             log.info("Creating MP4 video: {}x{} pixels, {} frames, {} fps",
-                scaledWidth, scaledHeight, frameImages.size(), 1000 / GIF_FRAME_DELAY_MS);
+                scaledWidth, scaledHeight, frameImages.size(), gifFps);
 
             // Create temporary file for video
             java.io.File tempFile = java.io.File.createTempFile("tracking_", ".mp4");
@@ -113,7 +115,7 @@ public class GifCreationService {
             recorder = new org.bytedeco.javacv.FFmpegFrameRecorder(tempFile.getAbsolutePath(), scaledWidth, scaledHeight);
             recorder.setVideoCodec(org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264);
             recorder.setFormat("mp4");
-            recorder.setFrameRate(1000.0 / GIF_FRAME_DELAY_MS); // 10 fps
+            recorder.setFrameRate(gifFps);
             recorder.setPixelFormat(org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P);
             recorder.setVideoBitrate(2000000); // 2 Mbps
             recorder.start();
@@ -188,5 +190,9 @@ public class GifCreationService {
                 log.warn("Error closing converter: {}", e.getMessage());
             }
         }
+    }
+
+    public int getGifFps() {
+        return Math.max(1, faceRecognitionProperties.getTelegram().getGifFps());
     }
 }

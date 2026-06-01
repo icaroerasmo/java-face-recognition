@@ -1,7 +1,9 @@
 package com.icaroerasmo.service;
 
 import com.icaroerasmo.properties.CameraProperties;
+import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.utils.Constants;
+import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
@@ -12,7 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -23,10 +25,10 @@ import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 
 @Log4j2
 @Service
+@RequiredArgsConstructor
 public class RtspFrameExtractorService {
 
-    // Frame queue capacity - 30 frames = 1 second buffer at 30fps
-    private static final int FRAME_QUEUE_CAPACITY = FPS;
+    private final StreamsProperties streamsProperties;
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
@@ -227,7 +229,10 @@ public class RtspFrameExtractorService {
     private void processFramesWithQueue(FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
                                        String rtspUrl, Consumer<Mat> consumer) throws Exception {
         // Create bounded queue - one per camera stream
-        BlockingQueue<FrameData> frameQueue = new LinkedBlockingQueue<>(FRAME_QUEUE_CAPACITY);
+        final int queueCapacity = Math.max(1, streamsProperties.getFrameQueueCapacity());
+        final int processingFps = Math.max(1, streamsProperties.getProcessingFps());
+        final long minFrameIntervalNs = TimeUnit.SECONDS.toNanos(1) / processingFps;
+        BlockingQueue<FrameData> frameQueue = new ArrayBlockingQueue<>(queueCapacity);
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         AtomicBoolean producerError = new AtomicBoolean(false);
 
@@ -235,9 +240,11 @@ public class RtspFrameExtractorService {
         Thread producer = new Thread(() -> {
             int nullFrameCount = 0;
             int maxNullFrames = 150;
+            long lastQueuedAtNs = 0;
 
             try {
-                log.info("Frame producer started for: {}", rtspUrl);
+                log.info("Frame producer started for: {} (processingFps={}, queueCapacity={})",
+                        rtspUrl, processingFps, queueCapacity);
 
                 while (!shouldStop.get() && !Thread.currentThread().isInterrupted()) {
                     Frame frame = null;
@@ -282,6 +289,13 @@ public class RtspFrameExtractorService {
                             continue;
                         }
 
+                        long nowNs = System.nanoTime();
+                        if (nowNs - lastQueuedAtNs < minFrameIntervalNs) {
+                            try { mat.release(); } catch (Exception ignore) {}
+                            continue;
+                        }
+                        lastQueuedAtNs = nowNs;
+
                         // Convert Mat to byte array - THIS PREVENTS MEMORY LEAKS
                         int width = mat.cols();
                         int height = mat.rows();
@@ -302,10 +316,14 @@ public class RtspFrameExtractorService {
 
                         // Store byte array in queue
                         FrameData frameData = new FrameData(frameBytes, width, height, channels);
-                        boolean added = frameQueue.offer(frameData, 1, TimeUnit.SECONDS);
+                        boolean added = frameQueue.offer(frameData);
 
                         if (!added) {
-                            log.debug("Frame queue full, dropping frame for: {}", rtspUrl);
+                            FrameData droppedFrame = frameQueue.poll();
+                            if (droppedFrame != null && !droppedFrame.isPoisonPill()) {
+                                log.debug("Frame queue full, dropping stale frame for: {}", rtspUrl);
+                            }
+                            frameQueue.offer(frameData);
                         }
 
                     } catch (Exception e) {

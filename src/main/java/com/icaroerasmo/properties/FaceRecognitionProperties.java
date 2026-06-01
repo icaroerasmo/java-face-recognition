@@ -20,4 +20,7 @@ public class FaceRecognitionProperties {
 
     @NestedConfigurationProperty
     private TelegramProperties telegram = new TelegramProperties();
+
+    @NestedConfigurationProperty
+    private AccelerationProperties acceleration = new AccelerationProperties();
 }

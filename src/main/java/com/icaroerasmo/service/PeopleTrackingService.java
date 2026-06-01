@@ -267,7 +267,7 @@ public class PeopleTrackingService {
                                     "<b>Frames:</b> %d\n" +
                                     "<b>Duration:</b> ~%.1f seconds",
                                     cameraName, determinedIdentity, allFrameImages.size(),
-                                    allFrameImages.size() * 0.1 // 100ms per frame = 0.1s
+                                    allFrameImages.size() / (double) gifCreationService.getGifFps()
                                 );
                                 telegramPublisherService.sendAnimation(gifBytes, gifCaption, cameraName);
                             } else {
