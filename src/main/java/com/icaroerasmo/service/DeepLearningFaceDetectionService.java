@@ -1,7 +1,8 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.properties.AccelerationProperties;
+import com.icaroerasmo.properties.FaceRecognitionProperties;
 import com.icaroerasmo.utils.MatUtil;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 
@@ -46,23 +47,33 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  */
 @Log4j2
 @Service
-@RequiredArgsConstructor
 public class DeepLearningFaceDetectionService {
 
     public static final int MODEL_INPUT_SIZE = 300;
     private static final String PROTO_FILE = "opencv/deploy.prototxt";
     private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
-    private static Net net = null;
+    private final Net net;
 
     private final MatUtil matUtil;
 
-    static {
+    public DeepLearningFaceDetectionService(MatUtil matUtil, FaceRecognitionProperties faceRecognitionProperties) {
+        this.matUtil = matUtil;
         try {
             String protoPath = getResourcePath(PROTO_FILE);
             String caffeModelPath = getResourcePath(CAFFE_MODEL_FILE);
 
             log.info("Loading face detection model from: {} and {}", protoPath, caffeModelPath);
-            net = readNetFromCaffe(protoPath, caffeModelPath);
+            this.net = readNetFromCaffe(protoPath, caffeModelPath);
+            configureNet(
+                    this.net,
+                    faceRecognitionProperties.getAcceleration().getBackend(),
+                    resolveTarget(
+                            faceRecognitionProperties.getAcceleration(),
+                            faceRecognitionProperties.getAcceleration().getFaceDetectionTarget()
+                    ),
+                    faceRecognitionProperties.getAcceleration().isFallbackToCpu(),
+                    "face detection"
+            );
             log.info("Face detection model loaded successfully");
         } catch (Exception e) {
             log.error("Failed to load face detection model", e);
@@ -123,26 +134,19 @@ public class DeepLearningFaceDetectionService {
             return faces;
         }
 
-        Mat output = null, ne = null, blob = null, image = null, resizedImage = null;
+        Mat output = null, ne = null, blob = null, resizedImage = null;
+        FloatIndexer srcIndexer = null;
+        Size inputSize = null;
+        Scalar meanValues = null;
 
         try {
             // Store original dimensions
             int originalWidth = testImage.size().width();
             int originalHeight = testImage.size().height();
 
-            // CRITICAL: Clone the input image to avoid any shared state issues across threads
-            // Even though method is synchronized, we clone to be extra safe
-            image = testImage.clone();
-
-            // Validate clone
-            if (image == null || image.empty()) {
-                log.warn("Failed to clone input image for face detection");
-                return faces;
-            }
-
-            // Create a separate resized image instead of resizing in-place
             resizedImage = new Mat();
-            resize(image, resizedImage, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE));
+            inputSize = new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+            resize(testImage, resizedImage, inputSize);
 
             // Validate resized image
             if (resizedImage.empty()) {
@@ -152,8 +156,8 @@ public class DeepLearningFaceDetectionService {
 
             // Create blob from resized image
             // NCHW: Number of images, Channels, Height, Width
-            blob = blobFromImage(resizedImage, 1.0, new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE),
-                                new Scalar(104.0, 177.0, 123.0, 0), false, false, CV_32F);
+            meanValues = new Scalar(104.0, 177.0, 123.0, 0);
+            blob = blobFromImage(resizedImage, 1.0, inputSize, meanValues, false, false, CV_32F);
 
             if (blob == null || blob.empty()) {
                 log.warn("Failed to create blob from image");
@@ -177,7 +181,7 @@ public class DeepLearningFaceDetectionService {
                 return faces;
             }
 
-            FloatIndexer srcIndexer = ne.createIndexer();
+            srcIndexer = ne.createIndexer();
 
             // Iterate through detections
             for (int i = 0; i < output.size(3); i++) {
@@ -204,8 +208,17 @@ public class DeepLearningFaceDetectionService {
             // Return empty list instead of throwing - more resilient
             return new ArrayList<>();
         } finally {
+            if (srcIndexer != null) {
+                srcIndexer.release();
+            }
+            if (meanValues != null) {
+                meanValues.deallocate();
+            }
+            if (inputSize != null) {
+                inputSize.deallocate();
+            }
             // Release all resources in reverse order of creation
-            matUtil.releaseResources(ne, output, blob, resizedImage, image);
+            matUtil.releaseResources(ne, output, blob, resizedImage);
         }
 
         return faces;
@@ -218,5 +231,58 @@ public class DeepLearningFaceDetectionService {
         float newBx = (bx/ MODEL_INPUT_SIZE)*width;
         float newBy = (by/ MODEL_INPUT_SIZE)*height;
         return new Rect(new Point((int) newTx, (int) newTy), new Point((int) newBx, (int) newBy));
+    }
+
+    private static void configureNet(
+            Net net,
+            AccelerationProperties.Backend backend,
+            AccelerationProperties.Target target,
+            boolean fallbackToCpu,
+            String modelName
+    ) {
+        try {
+            if (backend != null && backend != AccelerationProperties.Backend.AUTO) {
+                net.setPreferableBackend(mapBackend(backend));
+            }
+            if (target != null && target != AccelerationProperties.Target.AUTO) {
+                net.setPreferableTarget(mapTarget(target));
+            }
+            log.info("Configured {} DNN backend={} target={}", modelName, backend, target);
+        } catch (Exception e) {
+            if (!fallbackToCpu) {
+                throw e;
+            }
+            log.warn("Failed to configure {} acceleration (backend={}, target={}), falling back to CPU: {}",
+                    modelName, backend, target, e.getMessage());
+            net.setPreferableBackend(DNN_BACKEND_OPENCV);
+            net.setPreferableTarget(DNN_TARGET_CPU);
+        }
+    }
+
+    private static AccelerationProperties.Target resolveTarget(
+            AccelerationProperties accelerationProperties,
+            AccelerationProperties.Target configuredTarget
+    ) {
+        if (configuredTarget != null && configuredTarget != AccelerationProperties.Target.AUTO) {
+            return configuredTarget;
+        }
+        if (accelerationProperties.isEnableOpencl()) {
+            return AccelerationProperties.Target.OPENCL;
+        }
+        return accelerationProperties.getTarget();
+    }
+
+    private static int mapBackend(AccelerationProperties.Backend backend) {
+        return switch (backend) {
+            case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
+        };
+    }
+
+    private static int mapTarget(AccelerationProperties.Target target) {
+        return switch (target) {
+            case AUTO, CPU -> DNN_TARGET_CPU;
+            case OPENCL -> DNN_TARGET_OPENCL;
+            case OPENCL_FP16 -> DNN_TARGET_OPENCL_FP16;
+        };
     }
 }
