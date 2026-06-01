@@ -18,4 +18,16 @@ public class StreamsProperties {
      * Camera configurations with name and RTSP URL
      */
     private List<CameraProperties> cameras = new ArrayList<>();
+
+    /**
+     * Number of processed frames per second.
+     * Lower values reduce latency and memory pressure by skipping stale frames.
+     */
+    private int processingFps = 5;
+
+    /**
+     * Number of queued decoded frames per camera.
+     * Keep this low to prefer freshness over backlog.
+     */
+    private int frameQueueCapacity = 2;
 }
