@@ -412,7 +412,16 @@ public class PeopleTrackingService {
         } else {
             // New person, start tracking - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            TrackedPerson newTrack = new TrackedPerson(clonedRect, faceHash, now, distance, personName, imageBytes, allPeople);
+            TrackedPerson newTrack = new TrackedPerson(
+                clonedRect,
+                faceHash,
+                now,
+                distance,
+                personName,
+                imageBytes,
+                allPeople,
+                gifCreationService.getMaxGifFrames()
+            );
             cameraTrackedPeople.add(newTrack);
 
             // Schedule timeout notification in case person disappears
@@ -559,15 +568,30 @@ public class PeopleTrackingService {
         private final long firstSeen;
         private long lastSeen;
         private final List<FaceObservation> observations = new ArrayList<>();
+        private final List<byte[]> gifFrames = new ArrayList<>();
+        private final int maxGifFrames;
         private FaceObservation bestObservation; // Track the best scoring observation
+        private byte[] bestImageBytes;
         private ScheduledFuture<?> pendingNotification; // Timeout notification future
 
-        public TrackedPerson(Rect initialRect, byte[] initialFaceHash, long timestamp, double distanceScore, String personName, byte[] imageBytes, List<PersonDetection> allPeople) {
+        public TrackedPerson(
+                Rect initialRect,
+                byte[] initialFaceHash,
+                long timestamp,
+                double distanceScore,
+                String personName,
+                byte[] imageBytes,
+                List<PersonDetection> allPeople,
+                int maxGifFrames
+        ) {
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, distanceScore, personName, imageBytes, allPeople);
+            this.maxGifFrames = maxGifFrames;
+            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, distanceScore, personName, allPeople);
             this.observations.add(observation);
             this.bestObservation = observation; // First is best by default
+            this.bestImageBytes = imageBytes;
+            storeGifFrame(imageBytes);
 
             // Log initial tracking state
             boolean isKnown = personName != null &&
@@ -579,8 +603,9 @@ public class PeopleTrackingService {
 
         public void addObservation(Rect rect, byte[] faceHash, long timestamp, double distanceScore, String personName, byte[] imageBytes, List<PersonDetection> allPeople) {
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, distanceScore, personName, imageBytes, allPeople);
+            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, distanceScore, personName, allPeople);
             this.observations.add(observation);
+            storeGifFrame(imageBytes);
 
             // Calculate statistics for current tracking
             int totalFrames = observations.size();
@@ -617,8 +642,20 @@ public class PeopleTrackingService {
             // Update best observation if this one has lower distance (better match)
             if (bestObservation == null || distanceScore < bestObservation.distanceScore) {
                 bestObservation = observation;
+                bestImageBytes = imageBytes;
                 log.debug("🎯 NEW BEST: Frame {} has new best distance score: {} for '{}'",
                     totalFrames, String.format("%.2f", distanceScore), personName);
+            }
+        }
+
+        private void storeGifFrame(byte[] imageBytes) {
+            if (imageBytes == null || imageBytes.length == 0) {
+                return;
+            }
+
+            gifFrames.add(imageBytes);
+            if (gifFrames.size() > maxGifFrames) {
+                gifFrames.removeFirst();
             }
         }
 
@@ -649,20 +686,14 @@ public class PeopleTrackingService {
         }
 
         public byte[] getBestImageBytes() {
-            return bestObservation != null ? bestObservation.imageBytes : null;
+            return bestImageBytes;
         }
 
         /**
          * Get all frame images from observations for GIF creation
          */
         public List<byte[]> getAllFrameImages() {
-            List<byte[]> allImages = new ArrayList<>();
-            for (FaceObservation observation : observations) {
-                if (observation.imageBytes != null) {
-                    allImages.add(observation.imageBytes);
-                }
-            }
-            return allImages;
+            return new ArrayList<>(gifFrames);
         }
 
         /**
@@ -800,6 +831,7 @@ public class PeopleTrackingService {
                     observation.rect.deallocate();
                 }
             }
+            gifFrames.clear();
             observations.clear();
         }
     }
@@ -814,7 +846,6 @@ public class PeopleTrackingService {
         private final long timestamp;
         private final double distanceScore; // Lower is better
         private final String personName; // Detected identity for this frame
-        private final byte[] imageBytes; // Frame image for this observation
         private final List<PersonDetection> allPeople; // All detected people with names and rectangles
     }
 

@@ -31,6 +31,7 @@ face-recognition:
     bot-token: "${TELEGRAM_BOT_TOKEN:}"
     chat-id: "${TELEGRAM_CHAT_ID:}"
     gif-fps: 10
+    gif-max-frames: 30
 ```
 
 ## `face-recognition.streams`
@@ -84,6 +85,7 @@ Controls Telegram notification delivery and animation rendering.
 | `face-recognition.telegram.bot-token` | string | none | Telegram bot token. Prefer environment-variable injection instead of committing the real token. |
 | `face-recognition.telegram.chat-id` | string | none | Telegram chat ID that receives notifications. Prefer environment-variable injection instead of committing the real value. |
 | `face-recognition.telegram.gif-fps` | integer | `10` | Frame rate used when building Telegram animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
+| `face-recognition.telegram.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for Telegram clips. Lower values reduce RAM and clip-encoding cost. |
 
 ## Security guidance
 
@@ -94,4 +96,4 @@ Controls Telegram notification delivery and animation rendering.
 ## Notes
 
 1. Spring Boot relaxed binding accepts kebab-case keys in YAML and also supports equivalent environment-variable mappings.
-2. If you raise `processing-fps`, consider reviewing `frame-queue-capacity` and `gif-fps` too, because all three affect CPU usage, memory usage, and perceived latency.
+2. If you raise `processing-fps`, consider reviewing `frame-queue-capacity`, `gif-fps`, and `gif-max-frames` too, because all four affect CPU usage, memory usage, and perceived latency.
