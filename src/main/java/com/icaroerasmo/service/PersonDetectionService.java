@@ -48,9 +48,15 @@ public class PersonDetectionService {
 
     private final Net net;
     private final MatUtil matUtil;
+    private final DnnInferenceCoordinator dnnInferenceCoordinator;
 
-    public PersonDetectionService(MatUtil matUtil, FaceRecognitionProperties faceRecognitionProperties) {
+    public PersonDetectionService(
+            MatUtil matUtil,
+            FaceRecognitionProperties faceRecognitionProperties,
+            DnnInferenceCoordinator dnnInferenceCoordinator
+    ) {
         this.matUtil = matUtil;
+        this.dnnInferenceCoordinator = dnnInferenceCoordinator;
         try {
             String protoPath = getResourcePath(PROTO_FILE);
             String modelPath = getResourcePath(MODEL_FILE);
@@ -162,9 +168,12 @@ public class PersonDetectionService {
                 return people;
             }
 
-            // Run forward pass
-            net.setInput(blob);
-            output = net.forward();
+            Mat inferenceBlob = blob;
+            output = dnnInferenceCoordinator.runExclusive("person detection", () -> {
+                // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
+                net.setInput(inferenceBlob);
+                return net.forward();
+            });
 
             if (output == null || output.empty()) {
                 log.warn("Neural network forward pass returned empty output");

@@ -24,7 +24,6 @@ public class GifCreationService {
 
     // GIF parameters
     private static final int GIF_WIDTH = 640; // Resize frames to this width for smaller file size
-    private static final int MAX_FRAMES = 100; // Limit GIF to max 100 frames to keep file size reasonable
     private static final int MIN_FRAMES = 10; // Minimum frames required to create a meaningful GIF
 
     /**
@@ -47,17 +46,19 @@ public class GifCreationService {
 
         log.info("Creating GIF from {} frames", frameImages.size());
 
+        int maxFrames = getMaxGifFrames();
+
         // Limit number of frames to keep GIF size manageable
         List<byte[]> framesToUse = frameImages;
-        if (frameImages.size() > MAX_FRAMES) {
-            // Sample frames evenly to get MAX_FRAMES
-            int step = frameImages.size() / MAX_FRAMES;
+        if (frameImages.size() > maxFrames) {
+            // Sample frames evenly to get the configured frame budget.
+            int step = Math.max(1, frameImages.size() / maxFrames);
             framesToUse = new java.util.ArrayList<>();
             for (int i = 0; i < frameImages.size(); i += step) {
                 framesToUse.add(frameImages.get(i));
-                if (framesToUse.size() >= MAX_FRAMES) break;
+                if (framesToUse.size() >= maxFrames) break;
             }
-            log.info("Sampled {} frames from {} total frames", framesToUse.size(), frameImages.size());
+            log.info("Sampled {} frames from {} total frames (max {})", framesToUse.size(), frameImages.size(), maxFrames);
         }
 
         try {
@@ -194,5 +195,9 @@ public class GifCreationService {
 
     public int getGifFps() {
         return Math.max(1, faceRecognitionProperties.getTelegram().getGifFps());
+    }
+
+    public int getMaxGifFrames() {
+        return Math.max(MIN_FRAMES, faceRecognitionProperties.getTelegram().getGifMaxFrames());
     }
 }

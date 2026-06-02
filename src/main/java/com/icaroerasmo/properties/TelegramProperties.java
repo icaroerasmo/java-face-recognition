@@ -14,4 +14,6 @@ public class TelegramProperties {
     private String chatId;
     // Animation FPS for Telegram MP4/GIF previews
     private int gifFps = 10;
+    // Maximum number of frame images retained per tracked person for Telegram clips
+    private int gifMaxFrames = 30;
 }

@@ -55,9 +55,15 @@ public class DeepLearningFaceDetectionService {
     private final Net net;
 
     private final MatUtil matUtil;
+    private final DnnInferenceCoordinator dnnInferenceCoordinator;
 
-    public DeepLearningFaceDetectionService(MatUtil matUtil, FaceRecognitionProperties faceRecognitionProperties) {
+    public DeepLearningFaceDetectionService(
+            MatUtil matUtil,
+            FaceRecognitionProperties faceRecognitionProperties,
+            DnnInferenceCoordinator dnnInferenceCoordinator
+    ) {
         this.matUtil = matUtil;
+        this.dnnInferenceCoordinator = dnnInferenceCoordinator;
         try {
             String protoPath = getResourcePath(PROTO_FILE);
             String caffeModelPath = getResourcePath(CAFFE_MODEL_FILE);
@@ -164,9 +170,12 @@ public class DeepLearningFaceDetectionService {
                 return faces;
             }
 
-            // CRITICAL: These operations on shared 'net' object must be atomic
-            net.setInput(blob);
-            output = net.forward();
+            Mat inferenceBlob = blob;
+            output = dnnInferenceCoordinator.runExclusive("face detection", () -> {
+                // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
+                net.setInput(inferenceBlob);
+                return net.forward();
+            });
 
             if (output == null || output.empty()) {
                 log.warn("Neural network forward pass returned empty output");
