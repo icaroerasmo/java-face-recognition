@@ -18,8 +18,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_dnn.*;
@@ -133,6 +135,7 @@ public class DeepLearningFaceDetectionService {
 
         Mat blob = null, resizedImage = null, paddedImage = null;
         MatVector outputs = null;
+        StringVector outputNames = null;
         Size inputSize = null;
         Scalar meanValues = null;
 
@@ -174,21 +177,22 @@ public class DeepLearningFaceDetectionService {
             }
 
             Mat inferenceBlob = blob;
+            outputNames = net.getUnconnectedOutLayersNames();
+            StringVector finalOutputNames = outputNames;
             outputs = dnnInferenceCoordinator.runExclusive("face detection", () -> {
                 // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
                 net.setInput(inferenceBlob);
-                StringVector names = net.getUnconnectedOutLayersNames();
-                MatVector out = new MatVector(names.size());
-                net.forward(out, names);
+                MatVector out = new MatVector(finalOutputNames.size());
+                net.forward(out, finalOutputNames);
                 return out;
             });
 
-            if (outputs == null || outputs.size() < 6) {
+            if (outputs == null || outputs.size() < SCRFD_STRIDES.length * 3L) {
                 log.warn("Neural network forward pass returned empty output");
                 return faces;
             }
 
-            List<Detection> detections = decodeScrfdOutputs(outputs, scale, originalWidth, originalHeight);
+            List<Detection> detections = decodeScrfdOutputs(outputs, outputNames, scale, originalWidth, originalHeight);
             detections.sort(Comparator.comparing(Detection::confidence).reversed());
             faces.addAll(applyNms(detections));
 
@@ -203,6 +207,9 @@ public class DeepLearningFaceDetectionService {
             if (inputSize != null) {
                 inputSize.deallocate();
             }
+            if (outputNames != null) {
+                outputNames.deallocate();
+            }
             if (outputs != null) {
                 outputs.deallocate();
             }
@@ -213,15 +220,29 @@ public class DeepLearningFaceDetectionService {
         return faces;
     }
 
-    private List<Detection> decodeScrfdOutputs(MatVector outputs, float scale, int originalWidth, int originalHeight) {
+    private List<Detection> decodeScrfdOutputs(
+            MatVector outputs,
+            StringVector outputNames,
+            float scale,
+            int originalWidth,
+            int originalHeight
+    ) {
         List<Detection> detections = new ArrayList<>();
+        Map<String, Mat> outputByName = new HashMap<>();
+
+        for (long index = 0; index < outputs.size(); index++) {
+            String outputName = sanitizeOutputName(outputNames.get(index).getString());
+            outputByName.put(outputName, outputs.get(index));
+        }
 
         for (int strideIndex = 0; strideIndex < SCRFD_STRIDES.length; strideIndex++) {
             int stride = SCRFD_STRIDES[strideIndex];
-            Mat scores = outputs.get(strideIndex);
-            Mat boxes = outputs.get(strideIndex + SCRFD_STRIDES.length);
+            Mat scores = outputByName.get("score_" + stride);
+            Mat boxes = outputByName.get("bbox_" + stride);
 
             if (scores == null || scores.empty() || boxes == null || boxes.empty()) {
+                log.warn("SCRFD outputs missing for stride {} (score present: {}, bbox present: {})",
+                        stride, scores != null && !scores.empty(), boxes != null && !boxes.empty());
                 continue;
             }
 
@@ -234,9 +255,17 @@ public class DeepLearningFaceDetectionService {
                 int featureWidth = MODEL_INPUT_SIZE / stride;
                 int featureHeight = MODEL_INPUT_SIZE / stride;
                 int anchorCount = featureWidth * featureHeight * SCRFD_ANCHORS_PER_LOCATION;
+                long scoreEntries = getAnchoredEntryCount(scoreIndexer);
+                long boxEntries = getAnchoredEntryCount(boxIndexer);
+
+                if (scoreEntries < anchorCount || boxEntries < anchorCount) {
+                    log.warn("SCRFD output shape mismatch for stride {}: expected at least {} anchors, got scores={} boxes={}",
+                            stride, anchorCount, scoreEntries, boxEntries);
+                    continue;
+                }
 
                 for (int anchorIndex = 0; anchorIndex < anchorCount; anchorIndex++) {
-                    float confidence = scoreIndexer.get(anchorIndex);
+                    float confidence = getScore(scoreIndexer, anchorIndex);
                     if (confidence < CONFIDENCE_THRESHOLD) {
                         continue;
                     }
@@ -247,10 +276,10 @@ public class DeepLearningFaceDetectionService {
                     float anchorCenterX = x * stride;
                     float anchorCenterY = y * stride;
 
-                    float left = boxIndexer.get(anchorIndex * 4L) * stride;
-                    float top = boxIndexer.get(anchorIndex * 4L + 1) * stride;
-                    float right = boxIndexer.get(anchorIndex * 4L + 2) * stride;
-                    float bottom = boxIndexer.get(anchorIndex * 4L + 3) * stride;
+                    float left = getBoxCoordinate(boxIndexer, anchorIndex, 0) * stride;
+                    float top = getBoxCoordinate(boxIndexer, anchorIndex, 1) * stride;
+                    float right = getBoxCoordinate(boxIndexer, anchorIndex, 2) * stride;
+                    float bottom = getBoxCoordinate(boxIndexer, anchorIndex, 3) * stride;
 
                     int x1 = clamp(Math.round((anchorCenterX - left) / scale), 0, originalWidth - 1);
                     int y1 = clamp(Math.round((anchorCenterY - top) / scale), 0, originalHeight - 1);
@@ -274,6 +303,40 @@ public class DeepLearningFaceDetectionService {
         }
 
         return detections;
+    }
+
+    private long getAnchoredEntryCount(FloatIndexer indexer) {
+        if (indexer.rank() >= 2) {
+            return indexer.size(1);
+        }
+        return indexer.size(0);
+    }
+
+    private String sanitizeOutputName(String outputName) {
+        if (outputName == null) {
+            return "";
+        }
+        return outputName.replace("\u0000", "").trim();
+    }
+
+    private float getScore(FloatIndexer indexer, int anchorIndex) {
+        if (indexer.rank() >= 3) {
+            return indexer.get(0, anchorIndex, 0);
+        }
+        if (indexer.rank() == 2) {
+            return indexer.get(0, anchorIndex);
+        }
+        return indexer.get(anchorIndex);
+    }
+
+    private float getBoxCoordinate(FloatIndexer indexer, int anchorIndex, int coordinateIndex) {
+        if (indexer.rank() >= 3) {
+            return indexer.get(0, anchorIndex, coordinateIndex);
+        }
+        if (indexer.rank() == 2) {
+            return indexer.get(anchorIndex, coordinateIndex);
+        }
+        return indexer.get(anchorIndex * 4L + coordinateIndex);
     }
 
     private List<Rect> applyNms(List<Detection> detections) {
