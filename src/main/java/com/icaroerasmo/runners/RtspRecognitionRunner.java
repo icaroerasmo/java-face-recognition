@@ -240,7 +240,8 @@ public class RtspRecognitionRunner {
                                             personHash,
                                             100.0, // High distance that it's unknown
                                             fullFrameBytes,
-                                            allPeopleDetections // Pass ALL detected people with names for drawing
+                                            allPeopleDetections, // Pass ALL detected people with names for drawing
+                                            false
                                         );
 
                                         // When this person's tracking is ready, notification will have ALL people highlighted
@@ -371,7 +372,8 @@ public class RtspRecognitionRunner {
                                     faceHash,             // This person's hash
                                     face.getDistance(),   // This person's distance
                                     imageBytes,           // Full frame image bytes
-                                    allPeopleDetections  // ALL detected people with names and rectangles for drawing
+                                    allPeopleDetections,  // ALL detected people with names and rectangles for drawing
+                                    true
                                 );
 
                                 log.info("📋 TRACKING RESULT: camera='{}', face #{}, shouldSend={}, personName={}, score={}",

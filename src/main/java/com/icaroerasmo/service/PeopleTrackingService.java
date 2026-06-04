@@ -1,17 +1,20 @@
 package com.icaroerasmo.service;
 
-import com.icaroerasmo.utils.Constants;
+import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.extern.log4j.Log4j2;
+import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_core.Rect;
+import org.bytedeco.opencv.opencv_core.Size;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.*;
 import jakarta.annotation.PreDestroy;
 
@@ -24,10 +27,14 @@ import jakarta.annotation.PreDestroy;
 @Service
 public class PeopleTrackingService {
 
+    private static final String UNKNOWN_IDENTITY = "Unknown";
+    private static final int GIF_FRAME_MAX_WIDTH = 640;
+
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
     private final MatUtil matUtil;
     private final GifCreationService gifCreationService;
+    private final StreamsProperties streamsProperties;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
 
     // Track people per camera
@@ -39,11 +46,13 @@ public class PeopleTrackingService {
     public PeopleTrackingService(TelegramPublisherService telegramPublisherService,
                                DetectionHistoryService detectionHistoryService,
                                MatUtil matUtil,
-                               GifCreationService gifCreationService) {
+                               GifCreationService gifCreationService,
+                               StreamsProperties streamsProperties) {
         this.telegramPublisherService = telegramPublisherService;
         this.detectionHistoryService = detectionHistoryService;
         this.matUtil = matUtil;
         this.gifCreationService = gifCreationService;
+        this.streamsProperties = streamsProperties;
     }
 
     @PreDestroy
@@ -59,10 +68,6 @@ public class PeopleTrackingService {
             Thread.currentThread().interrupt();
         }
     }
-
-    // Minimum number of frames to track before sending notification
-    // 5 seconds of frames (150 frames at 30fps) to better handle people turning away
-    private static final int MIN_TRACKING_FRAMES = (int) (Constants.FPS * 5);
 
     // Maximum time to track a person (20 seconds to handle people turning/walking away)
     private static final long MAX_TRACKING_TIME_MS = 20 * 1000;
@@ -175,7 +180,7 @@ public class PeopleTrackingService {
                 return;
             }
 
-            boolean isUnknown = "Unknown".equalsIgnoreCase(determinedIdentity);
+            boolean isUnknown = isUnknownIdentity(determinedIdentity);
 
             // Convert image bytes to Mat so we can draw on it
             org.bytedeco.javacpp.BytePointer imagePointer = new org.bytedeco.javacpp.BytePointer(bestImageBytes);
@@ -308,7 +313,16 @@ public class PeopleTrackingService {
      * @param allPeople All detected people with their names and rectangles
      * @return TrackingResult indicating if should send, determined identity, and best frame data
      */
-    public TrackingResult trackFace(String cameraName, String personName, Rect faceRect, byte[] faceHash, double distance, byte[] imageBytes, List<PersonDetection> allPeople) {
+    public TrackingResult trackFace(
+            String cameraName,
+            String personName,
+            Rect faceRect,
+            byte[] faceHash,
+            double distance,
+            byte[] imageBytes,
+            List<PersonDetection> allPeople,
+            boolean hasVisibleFace
+    ) {
         if (faceRect == null || faceHash == null || imageBytes == null) {
             return TrackingResult.notReady(); // Can't track without face data
         }
@@ -322,7 +336,7 @@ public class PeopleTrackingService {
         if (matchedTrack != null) {
             // Update existing track - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-            matchedTrack.addObservation(clonedRect, faceHash, now, distance, personName, imageBytes, allPeople);
+            matchedTrack.addObservation(clonedRect, faceHash, now, distance, personName, imageBytes, allPeople, hasVisibleFace);
 
             long trackingDuration = now - matchedTrack.firstSeen;
             int frameCount = matchedTrack.observations.size();
@@ -336,37 +350,25 @@ public class PeopleTrackingService {
             matchedTrack.cancelPendingNotification();
             scheduleTimeoutNotification(matchedTrack, cameraName, cameraTrackedPeople);
 
+            double distanceMoved = matchedTrack.getTotalDistanceMoved();
+
+            if (frameCount >= getMaxTrackingFrames()) {
+                log.info("Camera '{}': Person tracking reached max frame cap of {} after {}ms (moved {}px) - finalizing track",
+                    cameraName, getMaxTrackingFrames(), trackingDuration, (int) distanceMoved);
+                if (distanceMoved < MIN_MOVEMENT_PIXELS) {
+                    return discardTrack(cameraTrackedPeople, matchedTrack, cameraName, trackingDuration, distanceMoved,
+                        "max frame cap without sufficient movement");
+                }
+                return finalizeTrack(cameraTrackedPeople, matchedTrack, cameraName, trackingDuration, distanceMoved,
+                    "max frame cap reached");
+            }
+
             // Check if we've tracked long enough
-            if (frameCount >= MIN_TRACKING_FRAMES && trackingDuration >= MIN_TRACKING_DURATION_MS) {
+            if (frameCount >= getMinTrackingFrames() && trackingDuration >= MIN_TRACKING_DURATION_MS) {
                 // Check if person is actually moving (not static)
-                double distanceMoved = matchedTrack.getTotalDistanceMoved();
                 if (distanceMoved > MIN_MOVEMENT_PIXELS) {
-                    // Determine the most common identity
-                    IdentityResult identityResult = matchedTrack.getMostCommonIdentity();
-                    String determinedIdentity = identityResult.getPersonName();
-                    int identityFrameCount = identityResult.getFrameCount();
-
-                    log.info("Camera '{}': Person tracked through {} frames over {}ms, moved {}px, determined identity: '{}', best score: {} - ready to send notification",
-                            cameraName, frameCount, trackingDuration, (int)distanceMoved, determinedIdentity,
-                            String.format("%.2f", matchedTrack.getBestDistance()));
-
-                    // Cancel timeout since we're sending immediately
-                    matchedTrack.cancelPendingNotification();
-
-                    // Get best frame data before cleanup
-                    byte[] bestFaceHash = matchedTrack.getBestFaceHash();
-                    double bestScore = matchedTrack.getBestDistance();
-                    byte[] bestImageBytes = matchedTrack.getBestImageBytes();
-                    List<PersonDetection> bestAllPeople = matchedTrack.getBestAllPeople();
-                    List<byte[]> allFrameImages = matchedTrack.getAllFrameImages();
-
-                    // Send notification immediately with identity frame count and total tracked frames
-                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
-
-                    // Remove from tracking and cleanup resources
-                    cameraTrackedPeople.remove(matchedTrack);
-                    matchedTrack.cleanup();
-                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes, bestAllPeople, identityFrameCount);
+                    return finalizeTrack(cameraTrackedPeople, matchedTrack, cameraName, trackingDuration, distanceMoved,
+                        "ready to send notification");
                 } else {
                     log.debug("Camera '{}': Person appears static (moved only {}px) - continuing to track",
                             cameraName, (int)distanceMoved);
@@ -375,41 +377,21 @@ public class PeopleTrackingService {
 
             // Check if tracking expired (tracked too long without movement)
             if (trackingDuration > MAX_TRACKING_TIME_MS) {
-                double distanceMoved = matchedTrack.getTotalDistanceMoved();
                 if (distanceMoved < MIN_MOVEMENT_PIXELS) {
-                    log.warn("Camera '{}': Person tracked for {}ms but barely moved ({}px) - likely detection artifact, discarding",
-                            cameraName, trackingDuration, (int)distanceMoved);
-                    cameraTrackedPeople.remove(matchedTrack);
-                    matchedTrack.cleanup();
-                    return TrackingResult.notReady(); // Don't send - likely false positive
+                    return discardTrack(cameraTrackedPeople, matchedTrack, cameraName, trackingDuration, distanceMoved,
+                        "tracking timeout without sufficient movement");
                 } else {
-                    // Determine the most common identity
-                    IdentityResult identityResult = matchedTrack.getMostCommonIdentity();
-                    String determinedIdentity = identityResult.getPersonName();
-                    int identityFrameCount = identityResult.getFrameCount();
-
-                    log.info("Camera '{}': Person tracking expired after {}ms, moved {}px, determined identity: '{}', best score: {} - sending notification",
-                            cameraName, trackingDuration, (int)distanceMoved, determinedIdentity,
-                            String.format("%.2f", matchedTrack.getBestDistance()));
-
-                    // Get best frame data before cleanup
-                    byte[] bestFaceHash = matchedTrack.getBestFaceHash();
-                    double bestScore = matchedTrack.getBestDistance();
-                    byte[] bestImageBytes = matchedTrack.getBestImageBytes();
-                    List<PersonDetection> bestAllPeople = matchedTrack.getBestAllPeople();
-                    List<byte[]> allFrameImages = matchedTrack.getAllFrameImages();
-
-                    // Send notification with identity frame count and total tracked frames
-                    sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
-
-                    cameraTrackedPeople.remove(matchedTrack);
-                    matchedTrack.cleanup();
-                    return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes, bestAllPeople, identityFrameCount);
+                    return finalizeTrack(cameraTrackedPeople, matchedTrack, cameraName, trackingDuration, distanceMoved,
+                        "tracking timeout reached");
                 }
             }
 
             return TrackingResult.notReady(); // Still tracking
         } else {
+            if (!isUnknownIdentity(personName) && hasVisibleFace) {
+                removeOverlappingUnknownTracks(cameraTrackedPeople, faceRect, cameraName, personName);
+            }
+
             // New person, start tracking - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
             TrackedPerson newTrack = new TrackedPerson(
@@ -420,7 +402,8 @@ public class PeopleTrackingService {
                 personName,
                 imageBytes,
                 allPeople,
-                gifCreationService.getMaxGifFrames()
+                gifCreationService.getMaxGifFrames(),
+                hasVisibleFace
             );
             cameraTrackedPeople.add(newTrack);
 
@@ -431,6 +414,54 @@ public class PeopleTrackingService {
                     cameraName, personName, faceRect.x(), faceRect.y(), String.format("%.2f", distance));
             return TrackingResult.notReady(); // Just started tracking
         }
+    }
+
+    private void removeOverlappingUnknownTracks(
+            List<TrackedPerson> cameraTrackedPeople,
+            Rect faceRect,
+            String cameraName,
+            String personName
+    ) {
+        List<TrackedPerson> tracksToRemove = new ArrayList<>();
+
+        for (TrackedPerson track : cameraTrackedPeople) {
+            if (!track.isUnknownTrack()) {
+                continue;
+            }
+
+            Rect trackedRect = track.getLatestRect();
+            if (trackedRect == null) {
+                continue;
+            }
+
+            if (containsFaceCenter(trackedRect, faceRect) || intersects(trackedRect, faceRect)) {
+                tracksToRemove.add(track);
+            }
+        }
+
+        for (TrackedPerson track : tracksToRemove) {
+            cameraTrackedPeople.remove(track);
+            track.cleanup();
+            log.info("Removed overlapping unknown track on camera '{}' after recognized face '{}' appeared",
+                cameraName, personName);
+        }
+    }
+
+    private boolean containsFaceCenter(Rect outerRect, Rect innerRect) {
+        int centerX = innerRect.x() + (innerRect.width() / 2);
+        int centerY = innerRect.y() + (innerRect.height() / 2);
+        return centerX >= outerRect.x()
+            && centerX <= outerRect.x() + outerRect.width()
+            && centerY >= outerRect.y()
+            && centerY <= outerRect.y() + outerRect.height();
+    }
+
+    private boolean intersects(Rect rect1, Rect rect2) {
+        int left = Math.max(rect1.x(), rect2.x());
+        int top = Math.max(rect1.y(), rect2.y());
+        int right = Math.min(rect1.x() + rect1.width(), rect2.x() + rect2.width());
+        int bottom = Math.min(rect1.y() + rect1.height(), rect2.y() + rect2.height());
+        return right > left && bottom > top;
     }
 
 
@@ -502,6 +533,54 @@ public class PeopleTrackingService {
 
         log.debug("🆕 NO MATCH: Creating new track for person at ({}, {})", faceRect.x(), faceRect.y());
         return null;
+    }
+
+    private TrackingResult finalizeTrack(
+            List<TrackedPerson> cameraTrackedPeople,
+            TrackedPerson track,
+            String cameraName,
+            long trackingDuration,
+            double distanceMoved,
+            String completionReason
+    ) {
+        int frameCount = track.observations.size();
+        IdentityResult identityResult = track.getMostCommonIdentity();
+        String determinedIdentity = identityResult.getPersonName();
+        int identityFrameCount = identityResult.getFrameCount();
+
+        log.info("Camera '{}': Person tracking completed ({}) after {} frames over {}ms, moved {}px, determined identity: '{}', best score: {}",
+            cameraName, completionReason, frameCount, trackingDuration, (int) distanceMoved, determinedIdentity,
+            String.format("%.2f", track.getBestDistance()));
+
+        track.cancelPendingNotification();
+
+        byte[] bestFaceHash = track.getBestFaceHash();
+        double bestScore = track.getBestDistance();
+        byte[] bestImageBytes = track.getBestImageBytes();
+        List<PersonDetection> bestAllPeople = track.getBestAllPeople();
+        List<byte[]> allFrameImages = track.getAllFrameImages();
+
+        sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople,
+            identityFrameCount, frameCount, allFrameImages);
+
+        cameraTrackedPeople.remove(track);
+        track.cleanup();
+        return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes, bestAllPeople, identityFrameCount);
+    }
+
+    private TrackingResult discardTrack(
+            List<TrackedPerson> cameraTrackedPeople,
+            TrackedPerson track,
+            String cameraName,
+            long trackingDuration,
+            double distanceMoved,
+            String discardReason
+    ) {
+        log.warn("Camera '{}': Discarding track ({}) after {} frames over {}ms with only {}px of movement",
+            cameraName, discardReason, track.observations.size(), trackingDuration, (int) distanceMoved);
+        cameraTrackedPeople.remove(track);
+        track.cleanup();
+        return TrackingResult.notReady();
     }
 
     /**
@@ -582,28 +661,36 @@ public class PeopleTrackingService {
                 String personName,
                 byte[] imageBytes,
                 List<PersonDetection> allPeople,
-                int maxGifFrames
+                int maxGifFrames,
+                boolean hasVisibleFace
         ) {
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
             this.maxGifFrames = maxGifFrames;
-            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, distanceScore, personName, allPeople);
+            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, distanceScore, personName, allPeople, hasVisibleFace);
             this.observations.add(observation);
             this.bestObservation = observation; // First is best by default
             this.bestImageBytes = imageBytes;
             storeGifFrame(imageBytes);
 
             // Log initial tracking state
-            boolean isKnown = personName != null &&
-                !"Unknown".equalsIgnoreCase(personName) &&
-                !personName.toLowerCase().contains("unknown");
+            boolean isKnown = !isUnknownIdentity(personName);
             log.debug("🆕 TRACKING STARTED: Frame 1, Identity='{}', Type={}, Distance={}",
                 personName, isKnown ? "KNOWN" : "UNKNOWN", String.format("%.2f", distanceScore));
         }
 
-        public void addObservation(Rect rect, byte[] faceHash, long timestamp, double distanceScore, String personName, byte[] imageBytes, List<PersonDetection> allPeople) {
+        public void addObservation(
+                Rect rect,
+                byte[] faceHash,
+                long timestamp,
+                double distanceScore,
+                String personName,
+                byte[] imageBytes,
+                List<PersonDetection> allPeople,
+                boolean hasVisibleFace
+        ) {
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, distanceScore, personName, allPeople);
+            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, distanceScore, personName, allPeople, hasVisibleFace);
             this.observations.add(observation);
             storeGifFrame(imageBytes);
 
@@ -617,9 +704,7 @@ public class PeopleTrackingService {
             long unknownCount = totalFrames - knownCount;
 
             // Determine if current observation is known or unknown
-            boolean isCurrentKnown = personName != null &&
-                !"Unknown".equalsIgnoreCase(personName) &&
-                !personName.toLowerCase().contains("unknown");
+            boolean isCurrentKnown = !isUnknownIdentity(personName);
 
             // Log EVERY frame to track recognition results
             log.info("📸 FRAME {}: identity='{}' ({}), distance={}, Known count: {}/{}, Unknown count: {}/{}",
@@ -639,8 +724,12 @@ public class PeopleTrackingService {
                     String.format("%.1f", (unknownCount * 100.0) / totalFrames));
             }
 
-            // Update best observation if this one has lower distance (better match)
-            if (bestObservation == null || distanceScore < bestObservation.distanceScore) {
+            // Prefer observations with a visible face; otherwise fall back to lowest distance.
+            boolean shouldReplaceBest = bestObservation == null
+                || (hasVisibleFace && !bestObservation.hasVisibleFace)
+                || (hasVisibleFace == bestObservation.hasVisibleFace && distanceScore < bestObservation.distanceScore);
+
+            if (shouldReplaceBest) {
                 bestObservation = observation;
                 bestImageBytes = imageBytes;
                 log.debug("🎯 NEW BEST: Frame {} has new best distance score: {} for '{}'",
@@ -653,9 +742,77 @@ public class PeopleTrackingService {
                 return;
             }
 
-            gifFrames.add(imageBytes);
+            gifFrames.add(createGifFrameSnapshot(imageBytes));
             if (gifFrames.size() > maxGifFrames) {
                 gifFrames.removeFirst();
+            }
+        }
+
+        private byte[] createGifFrameSnapshot(byte[] imageBytes) {
+            BytePointer imagePointer = null;
+            BytePointer jpgExt = null;
+            BytePointer outputBuffer = null;
+            Mat decodedFrame = null;
+            Mat resizedFrame = null;
+
+            try {
+                imagePointer = new BytePointer(imageBytes);
+                decodedFrame = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
+                    new org.bytedeco.opencv.opencv_core.Mat(imagePointer),
+                    org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_COLOR
+                );
+
+                if (decodedFrame == null || decodedFrame.empty()) {
+                    return imageBytes;
+                }
+
+                if (decodedFrame.cols() <= GIF_FRAME_MAX_WIDTH) {
+                    return imageBytes;
+                }
+
+                int scaledHeight = Math.max(1, (int) Math.round(
+                    decodedFrame.rows() * (GIF_FRAME_MAX_WIDTH / (double) decodedFrame.cols())
+                ));
+
+                resizedFrame = new Mat();
+                org.bytedeco.opencv.global.opencv_imgproc.resize(
+                    decodedFrame,
+                    resizedFrame,
+                    new Size(GIF_FRAME_MAX_WIDTH, scaledHeight)
+                );
+
+                if (resizedFrame.empty()) {
+                    return imageBytes;
+                }
+
+                jpgExt = new BytePointer(".jpg");
+                outputBuffer = new BytePointer();
+                org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, resizedFrame, outputBuffer);
+
+                byte[] resizedBytes = new byte[(int) outputBuffer.limit()];
+                outputBuffer.get(resizedBytes);
+                return resizedBytes;
+            } catch (Exception e) {
+                log.debug("Failed to compress tracking frame for GIF storage, using original bytes: {}", e.getMessage());
+                return imageBytes;
+            } finally {
+                if (imagePointer != null) {
+                    imagePointer.deallocate();
+                }
+                if (jpgExt != null) {
+                    jpgExt.deallocate();
+                }
+                if (outputBuffer != null) {
+                    outputBuffer.deallocate();
+                }
+                if (decodedFrame != null) {
+                    decodedFrame.releaseReference();
+                    decodedFrame.deallocate();
+                }
+                if (resizedFrame != null) {
+                    resizedFrame.releaseReference();
+                    resizedFrame.deallocate();
+                }
             }
         }
 
@@ -689,6 +846,10 @@ public class PeopleTrackingService {
             return bestImageBytes;
         }
 
+        public boolean isUnknownTrack() {
+            return observations.stream().allMatch(observation -> isUnknownIdentity(observation.personName));
+        }
+
         /**
          * Get all frame images from observations for GIF creation
          */
@@ -698,89 +859,117 @@ public class PeopleTrackingService {
 
         /**
          * Determine the most common identity across all observations.
-         * If a known person appears in at least 3% of frames, they are recognized as that person.
-         * This lower threshold helps identify people who turn their back to the camera.
+         * Unknown frames that are bracketed by repeated detections of the same known
+         * identity are first relabeled to that identity. After normalization, only
+         * useful (known) observations participate in the final vote.
          * @return IdentityResult containing the person name and count of frames they appeared in
          */
         public IdentityResult getMostCommonIdentity() {
-            Map<String, Integer> identityCounts = new java.util.HashMap<>();
-            int totalObservations = observations.size();
-
-            // Count occurrences of each identity
-            for (FaceObservation obs : observations) {
-                String name = obs.personName != null ? obs.personName : "Unknown";
-                identityCounts.put(name, identityCounts.getOrDefault(name, 0) + 1);
+            List<FaceObservation> normalizedObservations = getVoteEligibleObservations();
+            int totalObservations = normalizedObservations.size();
+            if (totalObservations < 3) {
+                log.info("❌ VERDICT: Only {} captured frame(s) in track. Minimum required is 3, classifying as '{}'.",
+                    totalObservations, UNKNOWN_IDENTITY);
+                return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
             }
+
+            List<FaceObservation> usefulObservations = normalizedObservations.stream()
+                .filter(observation -> !isUnknownIdentity(observation.personName))
+                .toList();
+            int usefulFrames = usefulObservations.size();
+            int unknownFrames = totalObservations - usefulFrames;
 
             // Calculate statistics for logging
-            int knownPersonFrames = 0;
-            int unknownFrames = 0;
-            for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
-                String name = entry.getKey();
-                int count = entry.getValue();
-                if ("Unknown".equalsIgnoreCase(name) || name.toLowerCase().contains("unknown")) {
-                    unknownFrames += count;
-                } else {
-                    knownPersonFrames += count;
-                }
-            }
-
-            // Log frame statistics
             log.info("📊 FRAME STATISTICS: Total frames: {}, Known person frames: {} ({}%), Unknown frames: {} ({}%)",
                 totalObservations,
-                knownPersonFrames, String.format("%.1f", (knownPersonFrames * 100.0) / totalObservations),
+                usefulFrames, String.format("%.1f", (usefulFrames * 100.0) / totalObservations),
                 unknownFrames, String.format("%.1f", (unknownFrames * 100.0) / totalObservations));
+
+            if (usefulFrames < 3) {
+                log.info("❌ VERDICT: Only {} useful frame(s) out of {} total frames. Minimum required is 3, classifying as '{}'.",
+                    usefulFrames, totalObservations, UNKNOWN_IDENTITY);
+                return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
+            }
+
+            Map<String, Integer> identityCounts = new java.util.HashMap<>();
+            for (FaceObservation obs : usefulObservations) {
+                String name = obs.personName != null ? obs.personName : UNKNOWN_IDENTITY;
+                identityCounts.put(name, identityCounts.getOrDefault(name, 0) + 1);
+            }
 
             // Log detailed breakdown by person
             StringBuilder breakdown = new StringBuilder("Frame breakdown by identity: ");
             for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
-                double percentage = (entry.getValue() * 100.0) / totalObservations;
+                double percentage = (entry.getValue() * 100.0) / usefulFrames;
                 breakdown.append(String.format("%s: %d (%.1f%%), ", entry.getKey(), entry.getValue(), percentage));
             }
             log.info(breakdown.toString());
 
-            // Minimum threshold: 5% of frames (reduced from 5% to handle back-turned cases)
-            int minThreshold = Math.max(1, (int) Math.ceil(totalObservations * 0.05));
-
-            // Find the most common KNOWN person (not Unknown) that meets the 3% threshold
-            String bestKnownPerson = null;
-            int bestKnownCount = 0;
+            String winningIdentity = UNKNOWN_IDENTITY;
+            int winningCount = 0;
+            boolean tiedWinner = false;
 
             for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
                 String name = entry.getKey();
                 int count = entry.getValue();
 
-                // Skip "Unknown" when looking for known persons
-                if (!"Unknown".equalsIgnoreCase(name) && !name.toLowerCase().contains("unknown")) {
-                    if (count >= minThreshold && count > bestKnownCount) {
-                        bestKnownCount = count;
-                        bestKnownPerson = name;
+                if (count > winningCount) {
+                    winningIdentity = name;
+                    winningCount = count;
+                    tiedWinner = false;
+                } else if (count == winningCount && !Objects.equals(name, winningIdentity)) {
+                    tiedWinner = true;
+                }
+            }
+
+            if (tiedWinner) {
+                log.info("⚠️ VERDICT: Identity pool tied at {} frames. Falling back to '{}' to avoid guessing.",
+                    winningCount, UNKNOWN_IDENTITY);
+                return new IdentityResult(UNKNOWN_IDENTITY, usefulFrames);
+            }
+
+            double percentage = (winningCount * 100.0) / usefulFrames;
+            log.info("✅ VERDICT: Identity pool winner is '{}' with {} useful frames ({}%) out of {} useful / {} total observations",
+                winningIdentity, winningCount, String.format("%.1f", percentage), usefulFrames, totalObservations);
+            return new IdentityResult(winningIdentity, winningCount);
+        }
+
+        private List<FaceObservation> getVoteEligibleObservations() {
+            if (observations.size() < 3) {
+                return observations;
+            }
+
+            List<FaceObservation> normalized = new ArrayList<>(observations);
+            Map<String, Integer> lastKnownIndexByIdentity = new java.util.HashMap<>();
+            int relabeledCount = 0;
+
+            for (int index = 0; index < observations.size(); index++) {
+                FaceObservation observation = observations.get(index);
+                String identity = observation.personName;
+
+                if (isUnknownIdentity(identity)) {
+                    continue;
+                }
+
+                Integer previousIndex = lastKnownIndexByIdentity.put(identity, index);
+                if (previousIndex == null || index - previousIndex < 2) {
+                    continue;
+                }
+
+                for (int between = previousIndex + 1; between < index; between++) {
+                    FaceObservation bridgedObservation = normalized.get(between);
+                    if (isUnknownIdentity(bridgedObservation.personName)) {
+                        normalized.set(between, bridgedObservation.withPersonName(identity));
+                        relabeledCount++;
                     }
                 }
             }
 
-            // If we found a known person with at least 5% of frames, return them
-            if (bestKnownPerson != null) {
-                double percentage = (bestKnownCount * 100.0) / totalObservations;
-                log.info("✅ VERDICT: Determined identity: '{}' appeared in {} frames ({}%) out of {} total observations (threshold: {} frames = 5%)",
-                    bestKnownPerson, bestKnownCount, String.format("%.1f", percentage), totalObservations, minThreshold);
-                return new IdentityResult(bestKnownPerson, bestKnownCount);
+            if (relabeledCount > 0) {
+                log.info("Relabeled {} bridged unknown observation(s) to surrounding known identities before voting", relabeledCount);
             }
 
-            // No known person reached 5% threshold, return Unknown with total frame count of other identities
-            // Count all frames that are not Unknown
-            int totalUnknownCount = 0;
-            for (Map.Entry<String, Integer> entry : identityCounts.entrySet()) {
-                String name = entry.getKey();
-                if (!"Unknown".equalsIgnoreCase(name)) {
-                    totalUnknownCount += entry.getValue();
-                }
-            }
-
-            log.info("❌ VERDICT: No known person reached 5% threshold ({} frames). Unknown appeared in {} frames ({}%) out of {} observations - classifying as Unknown",
-                minThreshold, totalUnknownCount, String.format("%.1f", (totalUnknownCount * 100.0) / totalObservations), totalObservations);
-
-            return new IdentityResult("Unknown", totalUnknownCount);
+            return normalized;
         }
 
 
@@ -847,6 +1036,11 @@ public class PeopleTrackingService {
         private final double distanceScore; // Lower is better
         private final String personName; // Detected identity for this frame
         private final List<PersonDetection> allPeople; // All detected people with names and rectangles
+        private final boolean hasVisibleFace;
+
+        private FaceObservation withPersonName(String updatedPersonName) {
+            return new FaceObservation(rect, faceHash, timestamp, distanceScore, updatedPersonName, allPeople, hasVisibleFace);
+        }
     }
 
     /**
@@ -867,5 +1061,17 @@ public class PeopleTrackingService {
     public static class IdentityResult {
         private final String personName;
         private final int frameCount; // Number of frames this person appeared in
+    }
+
+    private static boolean isUnknownIdentity(String personName) {
+        return personName == null || UNKNOWN_IDENTITY.equalsIgnoreCase(personName) || personName.toLowerCase().contains("unknown");
+    }
+
+    private int getMinTrackingFrames() {
+        return Math.max(5, streamsProperties.getProcessingFps() * 5);
+    }
+
+    private int getMaxTrackingFrames() {
+        return Math.max(3, streamsProperties.getTrackingMaxFrames());
     }
 }
