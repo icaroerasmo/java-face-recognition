@@ -50,8 +50,8 @@ COPY --from=build /app/target/rtsp-face-recognition-*.jar /app/rtsp-face-recogni
 # Copy training data from build stage if it exists
 RUN cp -r /app/target/classes/train/* /app/train/ 2>/dev/null || echo "Training data not found in build stage"
 
-# Copy OpenCV model files from build stage if they exist
-RUN cp -r /app/target/classes/opencv/* /app/opencv/ 2>/dev/null || echo "OpenCV files not found in build stage, will use classpath or runtime files"
+# Copy OpenCV model files from build stage
+COPY --from=build /app/target/classes/opencv/ /app/opencv/
 
 RUN ls -la /app && ls -la /app/train 2>/dev/null || echo "train directory may be empty" && ls -la /app/opencv 2>/dev/null || echo "opencv directory may be empty"
 
