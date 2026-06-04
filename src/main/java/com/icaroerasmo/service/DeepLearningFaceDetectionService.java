@@ -18,11 +18,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_dnn.*;
-import static org.bytedeco.opencv.global.opencv_imgcodecs.imwrite;
 import static org.bytedeco.opencv.global.opencv_imgproc.*;
 
 /**
@@ -31,27 +33,19 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  * @author Taha Emara
  * Email : taha@emaraic.com
  *
- * This example does face detection using deep learning model which provides a
- * great accuracy compared to OpenCV face detection using Haar cascades.
- *
- * This example is based on this code
- * https://github.com/opencv/opencv/blob/master/modules/dnn/misc/face_detector_accuracy.py
- *
- * To run this example you need two files: deploy.prototxt can be downloaded
- * from
- * https://github.com/opencv/opencv/blob/master/samples/dnn/face_detector/deploy.prototxt
- *
- * and res10_300x300_ssd_iter_140000.caffemodel
- * https://github.com/opencv/opencv_3rdparty/blob/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel
- *
+ * Face detection powered by SCRFD ONNX.
  */
 @Log4j2
 @Service
 public class DeepLearningFaceDetectionService {
 
-    public static final int MODEL_INPUT_SIZE = 300;
-    private static final String PROTO_FILE = "opencv/deploy.prototxt";
-    private static final String CAFFE_MODEL_FILE = "opencv/res10_300x300_ssd_iter_140000.caffemodel";
+    public static final int MODEL_INPUT_SIZE = 640;
+    private static final String SCRFD_MODEL_FILE = "opencv/scrfd_2.5g_bnkps.onnx";
+    private static final float CONFIDENCE_THRESHOLD = 0.45f;
+    private static final float NMS_THRESHOLD = 0.4f;
+    private static final int MAX_DETECTIONS = 50;
+    private static final int[] SCRFD_STRIDES = {8, 16, 32};
+    private static final int SCRFD_ANCHORS_PER_LOCATION = 2;
     private final Net net;
 
     private final MatUtil matUtil;
@@ -65,11 +59,10 @@ public class DeepLearningFaceDetectionService {
         this.matUtil = matUtil;
         this.dnnInferenceCoordinator = dnnInferenceCoordinator;
         try {
-            String protoPath = getResourcePath(PROTO_FILE);
-            String caffeModelPath = getResourcePath(CAFFE_MODEL_FILE);
+            String modelPath = getResourcePath(SCRFD_MODEL_FILE);
 
-            log.info("Loading face detection model from: {} and {}", protoPath, caffeModelPath);
-            this.net = readNetFromCaffe(protoPath, caffeModelPath);
+            log.info("Loading SCRFD face detection model from: {}", modelPath);
+            this.net = readNetFromONNX(modelPath);
             configureNet(
                     this.net,
                     faceRecognitionProperties.getAcceleration().getBackend(),
@@ -80,7 +73,7 @@ public class DeepLearningFaceDetectionService {
                     faceRecognitionProperties.getAcceleration().isFallbackToCpu(),
                     "face detection"
             );
-            log.info("Face detection model loaded successfully");
+            log.info("SCRFD face detection model loaded successfully");
         } catch (Exception e) {
             log.error("Failed to load face detection model", e);
             throw new RuntimeException("Failed to initialize face detection model", e);
@@ -140,8 +133,9 @@ public class DeepLearningFaceDetectionService {
             return faces;
         }
 
-        Mat output = null, ne = null, blob = null, resizedImage = null;
-        FloatIndexer srcIndexer = null;
+        Mat blob = null, resizedImage = null, paddedImage = null;
+        MatVector outputs = null;
+        StringVector outputNames = null;
         Size inputSize = null;
         Scalar meanValues = null;
 
@@ -150,9 +144,16 @@ public class DeepLearningFaceDetectionService {
             int originalWidth = testImage.size().width();
             int originalHeight = testImage.size().height();
 
+            float scale = Math.min(
+                    MODEL_INPUT_SIZE / (float) originalWidth,
+                    MODEL_INPUT_SIZE / (float) originalHeight
+            );
+            int resizedWidth = Math.round(originalWidth * scale);
+            int resizedHeight = Math.round(originalHeight * scale);
+
             resizedImage = new Mat();
             inputSize = new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
-            resize(testImage, resizedImage, inputSize);
+            resize(testImage, resizedImage, new Size(resizedWidth, resizedHeight));
 
             // Validate resized image
             if (resizedImage.empty()) {
@@ -160,10 +161,15 @@ public class DeepLearningFaceDetectionService {
                 return faces;
             }
 
+            paddedImage = new Mat(inputSize, testImage.type(), new Scalar(0, 0, 0, 0));
+            Mat roi = new Mat(paddedImage, new Rect(0, 0, resizedWidth, resizedHeight));
+            resizedImage.copyTo(roi);
+            roi.deallocate();
+
             // Create blob from resized image
             // NCHW: Number of images, Channels, Height, Width
-            meanValues = new Scalar(104.0, 177.0, 123.0, 0);
-            blob = blobFromImage(resizedImage, 1.0, inputSize, meanValues, false, false, CV_32F);
+            meanValues = new Scalar(127.5, 127.5, 127.5, 0);
+            blob = blobFromImage(paddedImage, 1.0 / 128.0, inputSize, meanValues, true, false, CV_32F);
 
             if (blob == null || blob.empty()) {
                 log.warn("Failed to create blob from image");
@@ -171,76 +177,218 @@ public class DeepLearningFaceDetectionService {
             }
 
             Mat inferenceBlob = blob;
-            output = dnnInferenceCoordinator.runExclusive("face detection", () -> {
+            outputNames = net.getUnconnectedOutLayersNames();
+            StringVector finalOutputNames = outputNames;
+            outputs = dnnInferenceCoordinator.runExclusive("face detection", () -> {
                 // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
                 net.setInput(inferenceBlob);
-                return net.forward();
+                MatVector out = new MatVector(finalOutputNames.size());
+                net.forward(out, finalOutputNames);
+                return out;
             });
 
-            if (output == null || output.empty()) {
+            if (outputs == null || outputs.size() < SCRFD_STRIDES.length * 3L) {
                 log.warn("Neural network forward pass returned empty output");
                 return faces;
             }
 
-            // Extract 2D matrix from 4D output (detections x 7)
-            ne = new Mat(new Size(output.size(3), output.size(2)), CV_32F, output.ptr(0, 0));
-
-            if (ne.empty()) {
-                log.warn("Failed to extract detection matrix from network output");
-                return faces;
-            }
-
-            srcIndexer = ne.createIndexer();
-
-            // Iterate through detections
-            for (int i = 0; i < output.size(3); i++) {
-                float confidence = srcIndexer.get(i, 2);
-
-                if (confidence > 0.7) {
-                    float f1 = srcIndexer.get(i, 3); // x1
-                    float f2 = srcIndexer.get(i, 4); // y1
-                    float f3 = srcIndexer.get(i, 5); // x2
-                    float f4 = srcIndexer.get(i, 6); // y2
-
-                    float tx = f1 * MODEL_INPUT_SIZE; // top left x
-                    float ty = f2 * MODEL_INPUT_SIZE; // top left y
-                    float bx = f3 * MODEL_INPUT_SIZE; // bottom right x
-                    float by = f4 * MODEL_INPUT_SIZE; // bottom right y
-
-                    Rect faceRect = createReact(tx, ty, bx, by, originalWidth, originalHeight);
-                    faces.add(faceRect);
-                }
-            }
+            List<Detection> detections = decodeScrfdOutputs(outputs, outputNames, scale, originalWidth, originalHeight);
+            detections.sort(Comparator.comparing(Detection::confidence).reversed());
+            faces.addAll(applyNms(detections));
 
         } catch (Exception e) {
             log.error("Error during face detection", e);
             // Return empty list instead of throwing - more resilient
             return new ArrayList<>();
         } finally {
-            if (srcIndexer != null) {
-                srcIndexer.release();
-            }
             if (meanValues != null) {
                 meanValues.deallocate();
             }
             if (inputSize != null) {
                 inputSize.deallocate();
             }
+            if (outputNames != null) {
+                outputNames.deallocate();
+            }
+            if (outputs != null) {
+                outputs.deallocate();
+            }
             // Release all resources in reverse order of creation
-            matUtil.releaseResources(ne, output, blob, resizedImage);
+            matUtil.releaseResources(blob, paddedImage, resizedImage);
         }
 
         return faces;
     }
 
-    // Creates rect based on original image size that was resized due model input
-    private Rect createReact(float tx, float ty, float bx, float by, int width, int height) {
-        float newTx = (tx/ MODEL_INPUT_SIZE)*width;
-        float newTy = (ty/ MODEL_INPUT_SIZE)*height;
-        float newBx = (bx/ MODEL_INPUT_SIZE)*width;
-        float newBy = (by/ MODEL_INPUT_SIZE)*height;
-        return new Rect(new Point((int) newTx, (int) newTy), new Point((int) newBx, (int) newBy));
+    private List<Detection> decodeScrfdOutputs(
+            MatVector outputs,
+            StringVector outputNames,
+            float scale,
+            int originalWidth,
+            int originalHeight
+    ) {
+        List<Detection> detections = new ArrayList<>();
+        Map<String, Mat> outputByName = new HashMap<>();
+
+        for (long index = 0; index < outputs.size(); index++) {
+            String outputName = sanitizeOutputName(outputNames.get(index).getString());
+            outputByName.put(outputName, outputs.get(index));
+        }
+
+        for (int strideIndex = 0; strideIndex < SCRFD_STRIDES.length; strideIndex++) {
+            int stride = SCRFD_STRIDES[strideIndex];
+            Mat scores = outputByName.get("score_" + stride);
+            Mat boxes = outputByName.get("bbox_" + stride);
+
+            if (scores == null || scores.empty() || boxes == null || boxes.empty()) {
+                log.warn("SCRFD outputs missing for stride {} (score present: {}, bbox present: {})",
+                        stride, scores != null && !scores.empty(), boxes != null && !boxes.empty());
+                continue;
+            }
+
+            FloatIndexer scoreIndexer = null;
+            FloatIndexer boxIndexer = null;
+            try {
+                scoreIndexer = scores.createIndexer();
+                boxIndexer = boxes.createIndexer();
+
+                int featureWidth = MODEL_INPUT_SIZE / stride;
+                int featureHeight = MODEL_INPUT_SIZE / stride;
+                int anchorCount = featureWidth * featureHeight * SCRFD_ANCHORS_PER_LOCATION;
+                long scoreEntries = getAnchoredEntryCount(scoreIndexer);
+                long boxEntries = getAnchoredEntryCount(boxIndexer);
+
+                if (scoreEntries < anchorCount || boxEntries < anchorCount) {
+                    log.warn("SCRFD output shape mismatch for stride {}: expected at least {} anchors, got scores={} boxes={}",
+                            stride, anchorCount, scoreEntries, boxEntries);
+                    continue;
+                }
+
+                for (int anchorIndex = 0; anchorIndex < anchorCount; anchorIndex++) {
+                    float confidence = getScore(scoreIndexer, anchorIndex);
+                    if (confidence < CONFIDENCE_THRESHOLD) {
+                        continue;
+                    }
+
+                    int locationIndex = anchorIndex / SCRFD_ANCHORS_PER_LOCATION;
+                    int x = locationIndex % featureWidth;
+                    int y = locationIndex / featureWidth;
+                    float anchorCenterX = x * stride;
+                    float anchorCenterY = y * stride;
+
+                    float left = getBoxCoordinate(boxIndexer, anchorIndex, 0) * stride;
+                    float top = getBoxCoordinate(boxIndexer, anchorIndex, 1) * stride;
+                    float right = getBoxCoordinate(boxIndexer, anchorIndex, 2) * stride;
+                    float bottom = getBoxCoordinate(boxIndexer, anchorIndex, 3) * stride;
+
+                    int x1 = clamp(Math.round((anchorCenterX - left) / scale), 0, originalWidth - 1);
+                    int y1 = clamp(Math.round((anchorCenterY - top) / scale), 0, originalHeight - 1);
+                    int x2 = clamp(Math.round((anchorCenterX + right) / scale), 0, originalWidth - 1);
+                    int y2 = clamp(Math.round((anchorCenterY + bottom) / scale), 0, originalHeight - 1);
+
+                    if (x2 <= x1 || y2 <= y1) {
+                        continue;
+                    }
+
+                    detections.add(new Detection(new Rect(x1, y1, x2 - x1, y2 - y1), confidence));
+                }
+            } finally {
+                if (scoreIndexer != null) {
+                    scoreIndexer.release();
+                }
+                if (boxIndexer != null) {
+                    boxIndexer.release();
+                }
+            }
+        }
+
+        return detections;
     }
+
+    private long getAnchoredEntryCount(FloatIndexer indexer) {
+        if (indexer.rank() >= 2) {
+            return indexer.size(1);
+        }
+        return indexer.size(0);
+    }
+
+    private String sanitizeOutputName(String outputName) {
+        if (outputName == null) {
+            return "";
+        }
+        return outputName.replace("\u0000", "").trim();
+    }
+
+    private float getScore(FloatIndexer indexer, int anchorIndex) {
+        if (indexer.rank() >= 3) {
+            return indexer.get(0, anchorIndex, 0);
+        }
+        if (indexer.rank() == 2) {
+            return indexer.get(0, anchorIndex);
+        }
+        return indexer.get(anchorIndex);
+    }
+
+    private float getBoxCoordinate(FloatIndexer indexer, int anchorIndex, int coordinateIndex) {
+        if (indexer.rank() >= 3) {
+            return indexer.get(0, anchorIndex, coordinateIndex);
+        }
+        if (indexer.rank() == 2) {
+            return indexer.get(anchorIndex, coordinateIndex);
+        }
+        return indexer.get(anchorIndex * 4L + coordinateIndex);
+    }
+
+    private List<Rect> applyNms(List<Detection> detections) {
+        List<Rect> selected = new ArrayList<>();
+        boolean[] suppressed = new boolean[detections.size()];
+
+        for (int i = 0; i < detections.size() && selected.size() < MAX_DETECTIONS; i++) {
+            if (suppressed[i]) {
+                continue;
+            }
+
+            Detection current = detections.get(i);
+            selected.add(current.rect());
+
+            for (int j = i + 1; j < detections.size(); j++) {
+                if (!suppressed[j] && intersectionOverUnion(current.rect(), detections.get(j).rect()) > NMS_THRESHOLD) {
+                    suppressed[j] = true;
+                }
+            }
+        }
+
+        return selected;
+    }
+
+    private float intersectionOverUnion(Rect a, Rect b) {
+        int ax2 = a.x() + a.width();
+        int ay2 = a.y() + a.height();
+        int bx2 = b.x() + b.width();
+        int by2 = b.y() + b.height();
+
+        int intersectionX1 = Math.max(a.x(), b.x());
+        int intersectionY1 = Math.max(a.y(), b.y());
+        int intersectionX2 = Math.min(ax2, bx2);
+        int intersectionY2 = Math.min(ay2, by2);
+
+        int intersectionWidth = Math.max(0, intersectionX2 - intersectionX1);
+        int intersectionHeight = Math.max(0, intersectionY2 - intersectionY1);
+        int intersectionArea = intersectionWidth * intersectionHeight;
+        int unionArea = a.width() * a.height() + b.width() * b.height() - intersectionArea;
+
+        if (unionArea <= 0) {
+            return 0;
+        }
+
+        return intersectionArea / (float) unionArea;
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(value, max));
+    }
+
+    private record Detection(Rect rect, float confidence) {}
 
     private static void configureNet(
             Net net,
