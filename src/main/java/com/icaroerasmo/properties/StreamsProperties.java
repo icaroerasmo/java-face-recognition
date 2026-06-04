@@ -30,4 +30,10 @@ public class StreamsProperties {
      * Keep this low to prefer freshness over backlog.
      */
     private int frameQueueCapacity = 2;
+
+    /**
+     * Maximum number of frames retained in a single tracking session before it is finalized.
+     * This caps memory growth for long-lived tracks.
+     */
+    private int trackingMaxFrames = 30;
 }
