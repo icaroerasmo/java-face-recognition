@@ -13,6 +13,7 @@ face-recognition:
   streams:
     processing-fps: 5
     frame-queue-capacity: 2
+    tracking-max-frames: 30
     cameras:
       - name: "<camera-name>"
         url: "rtsp://<host>:<port>/<stream>"
@@ -42,6 +43,7 @@ Controls camera ingestion, frame freshness, and queueing behavior.
 |---|---|---:|---|
 | `face-recognition.streams.processing-fps` | integer | `5` | Maximum number of frames per second that the pipeline will process per camera. Lower values reduce latency and memory usage. Higher values can improve temporal smoothness but increase load. |
 | `face-recognition.streams.frame-queue-capacity` | integer | `2` | Number of decoded frames buffered per camera. Small values prefer fresh frames over stale backlog. |
+| `face-recognition.streams.tracking-max-frames` | integer | `30` | Maximum number of captured frames kept in a single tracking session before the track is finalized and evaluated. Lower values cap memory use sooner; higher values keep longer motion context. |
 | `face-recognition.streams.cameras` | list | `[]` | List of camera definitions to ingest. |
 
 ### `face-recognition.streams.cameras[]`
@@ -96,4 +98,4 @@ Controls Telegram notification delivery and animation rendering.
 ## Notes
 
 1. Spring Boot relaxed binding accepts kebab-case keys in YAML and also supports equivalent environment-variable mappings.
-2. If you raise `processing-fps`, consider reviewing `frame-queue-capacity`, `gif-fps`, and `gif-max-frames` too, because all four affect CPU usage, memory usage, and perceived latency.
+2. If you raise `processing-fps`, consider reviewing `frame-queue-capacity`, `tracking-max-frames`, `gif-fps`, and `gif-max-frames` too, because all four affect CPU usage, memory usage, and perceived latency.

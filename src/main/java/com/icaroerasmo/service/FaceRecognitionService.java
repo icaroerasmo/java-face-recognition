@@ -132,7 +132,7 @@ public class FaceRecognitionService {
                     faceRecognizer.predict(img, detectedPersonPtr, distancePtr);
 
                     String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
-                    String detectedPerson = label.substring(0, label.length() - 1);
+                    String detectedPerson = sanitizeLabel(label);
                     double detectionDistance = distancePtr.get(0);
 
                     // Calculate adaptive threshold based on face size relative to frame
@@ -508,5 +508,14 @@ public class FaceRecognitionService {
             double threshold = BASE_DISTANCE * factor;
             return Math.min(threshold, MAX_ADAPTIVE_THRESHOLD);
         }
+    }
+
+    private String sanitizeLabel(String label) {
+        if (label == null) {
+            return UNKNOWN;
+        }
+
+        String sanitized = label.replace("\u0000", "").trim();
+        return sanitized.isEmpty() ? UNKNOWN : sanitized;
     }
 }
