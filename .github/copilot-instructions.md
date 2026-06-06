@@ -36,4 +36,5 @@ There is no dedicated lint command configured in `pom.xml` or in GitHub Actions.
 - Training data is organized as one folder per identity under the configured training root. The folder name becomes the recognition label.
 - When adding OpenCV/JavaCV logic, follow the existing pattern of explicit cleanup for `Mat`, `BytePointer`, `MatVector`, and similar native objects; this codebase does not rely on GC to reclaim native memory safely.
 - Release automation is tied to GitHub Actions: creating a `release/*` branch updates the Maven version in `pom.xml`, and merging a pull request into `main` publishes the container image to GHCR.
-- When testing rebuild docker image and create a new image with label "local"
+- After a release is merged and the publish workflow completes, update deployed environments by pulling `ghcr.io/icaroerasmo/java-face-recognition:latest` and recreating the `rtsp-face-recognition` container from `/run/media/games/frigate/docker-compose.yaml`.
+- For local validation before release, build and run `ghcr.io/icaroerasmo/java-face-recognition:local` via the `/run/media/games/frigate/docker-compose.local.yaml` override instead of editing the main compose file.
