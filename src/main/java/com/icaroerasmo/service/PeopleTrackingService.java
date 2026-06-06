@@ -29,6 +29,7 @@ public class PeopleTrackingService {
 
     private static final String UNKNOWN_IDENTITY = "Unknown";
     private static final int GIF_FRAME_MAX_WIDTH = 640;
+    private static final int MIN_KNOWN_FRAMES_FOR_IDENTITY = 3;
 
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
@@ -859,21 +860,18 @@ public class PeopleTrackingService {
 
         /**
          * Determine the most common identity across all observations.
-         * Unknown frames that are bracketed by repeated detections of the same known
-         * identity are first relabeled to that identity. After normalization, only
-         * useful (known) observations participate in the final vote.
+         * Only non-unknown observations participate in the final vote.
          * @return IdentityResult containing the person name and count of frames they appeared in
          */
         public IdentityResult getMostCommonIdentity() {
-            List<FaceObservation> normalizedObservations = getVoteEligibleObservations();
-            int totalObservations = normalizedObservations.size();
-            if (totalObservations < 3) {
-                log.info("❌ VERDICT: Only {} captured frame(s) in track. Minimum required is 3, classifying as '{}'.",
-                    totalObservations, UNKNOWN_IDENTITY);
+            int totalObservations = observations.size();
+            if (totalObservations < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
+                log.info("❌ VERDICT: Only {} captured frame(s) in track. Minimum required is {}, classifying as '{}'.",
+                    totalObservations, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
                 return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
             }
 
-            List<FaceObservation> usefulObservations = normalizedObservations.stream()
+            List<FaceObservation> usefulObservations = observations.stream()
                 .filter(observation -> !isUnknownIdentity(observation.personName))
                 .toList();
             int usefulFrames = usefulObservations.size();
@@ -885,9 +883,9 @@ public class PeopleTrackingService {
                 usefulFrames, String.format("%.1f", (usefulFrames * 100.0) / totalObservations),
                 unknownFrames, String.format("%.1f", (unknownFrames * 100.0) / totalObservations));
 
-            if (usefulFrames < 3) {
-                log.info("❌ VERDICT: Only {} useful frame(s) out of {} total frames. Minimum required is 3, classifying as '{}'.",
-                    usefulFrames, totalObservations, UNKNOWN_IDENTITY);
+            if (usefulFrames < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
+                log.info("❌ VERDICT: Only {} useful frame(s) out of {} total frames. Minimum required is {}, classifying as '{}'.",
+                    usefulFrames, totalObservations, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
                 return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
             }
 
@@ -928,48 +926,16 @@ public class PeopleTrackingService {
                 return new IdentityResult(UNKNOWN_IDENTITY, usefulFrames);
             }
 
+            if (winningCount < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
+                log.info("❌ VERDICT: Winning identity '{}' only has {} non-unknown frame(s). Minimum required is {}, classifying as '{}'.",
+                    winningIdentity, winningCount, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
+                return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
+            }
+
             double percentage = (winningCount * 100.0) / usefulFrames;
             log.info("✅ VERDICT: Identity pool winner is '{}' with {} useful frames ({}%) out of {} useful / {} total observations",
                 winningIdentity, winningCount, String.format("%.1f", percentage), usefulFrames, totalObservations);
             return new IdentityResult(winningIdentity, winningCount);
-        }
-
-        private List<FaceObservation> getVoteEligibleObservations() {
-            if (observations.size() < 3) {
-                return observations;
-            }
-
-            List<FaceObservation> normalized = new ArrayList<>(observations);
-            Map<String, Integer> lastKnownIndexByIdentity = new java.util.HashMap<>();
-            int relabeledCount = 0;
-
-            for (int index = 0; index < observations.size(); index++) {
-                FaceObservation observation = observations.get(index);
-                String identity = observation.personName;
-
-                if (isUnknownIdentity(identity)) {
-                    continue;
-                }
-
-                Integer previousIndex = lastKnownIndexByIdentity.put(identity, index);
-                if (previousIndex == null || index - previousIndex < 2) {
-                    continue;
-                }
-
-                for (int between = previousIndex + 1; between < index; between++) {
-                    FaceObservation bridgedObservation = normalized.get(between);
-                    if (isUnknownIdentity(bridgedObservation.personName)) {
-                        normalized.set(between, bridgedObservation.withPersonName(identity));
-                        relabeledCount++;
-                    }
-                }
-            }
-
-            if (relabeledCount > 0) {
-                log.info("Relabeled {} bridged unknown observation(s) to surrounding known identities before voting", relabeledCount);
-            }
-
-            return normalized;
         }
 
 
@@ -1037,10 +1003,6 @@ public class PeopleTrackingService {
         private final String personName; // Detected identity for this frame
         private final List<PersonDetection> allPeople; // All detected people with names and rectangles
         private final boolean hasVisibleFace;
-
-        private FaceObservation withPersonName(String updatedPersonName) {
-            return new FaceObservation(rect, faceHash, timestamp, distanceScore, updatedPersonName, allPeople, hasVisibleFace);
-        }
     }
 
     /**
