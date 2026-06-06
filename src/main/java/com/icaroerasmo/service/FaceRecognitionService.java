@@ -36,6 +36,9 @@ import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
 @RequiredArgsConstructor
 public class FaceRecognitionService {
 
+    private record TrainingImageSample(Path imagePath, Mat face, String personName) {
+    }
+
     private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
     private final MatUtil matUtil;
     private final TrainingProperties trainingProperties;
@@ -174,60 +177,102 @@ public class FaceRecognitionService {
     public FaceRecognizer train(Path rootFolder) throws IOException {
         Path rootFolderPath = rootFolder;
 
-        // Use try-with-resources to properly close streams
-        Map<Path, Object[]> fileList;
+        List<Path> personFolders;
         try (var rootStream = Files.list(rootFolderPath)) {
-            fileList = rootStream
-                .filter(file -> file.toFile().isDirectory())
-                .flatMap(folder -> {
-                    try {
-                        var personName = folder.getName(folder.getNameCount() - 1).toString();
-                        // Need to collect to list to avoid nested stream issues
-                        return Files.list(folder).map(file -> Map.entry(file, personName));
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                })
-                .map(entry -> {
-                    File image = entry.getKey().toFile();
-
-                    Mat img = imread(image.getAbsolutePath());
-
-                    List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
-
-                    if (facesList.isEmpty()) {
-                        return null;
-                    }
-
-                    Rect faceRect = facesList.getFirst();
-                    Mat face = new Mat(img, faceRect);
-
-                    matUtil.releaseResources(img);
-
-                    return Map.entry(entry.getKey(), new Object[]{face, entry.getValue()});
-                })
-                .filter(entry -> entry != null)
-                .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
+            personFolders = rootStream
+                .filter(Files::isDirectory)
+                .sorted()
+                .toList();
         }
 
-        MatVector images = new MatVector(fileList.size());
+        List<TrainingImageSample> trainingSamples = new ArrayList<>();
+        List<String> invalidPeople = new ArrayList<>();
 
-        List<String> strLabels = fileList.values().stream().map(data -> (String)data[1]).distinct().toList();
+        for (Path personFolder : personFolders) {
+            String personName = personFolder.getFileName().toString();
+            int validSamples = 0;
 
-        Mat labels = new Mat(fileList.size(), 1, CV_32SC1);
+            try (var personImagesStream = Files.list(personFolder)) {
+                List<Path> personImages = personImagesStream
+                    .filter(Files::isRegularFile)
+                    .sorted()
+                    .toList();
+
+                for (Path imagePath : personImages) {
+                    Mat img = imread(imagePath.toString());
+
+                    try {
+                        if (img.empty()) {
+                            log.warn("Skipping unreadable training image '{}' for '{}'", imagePath.getFileName(), personName);
+                            continue;
+                        }
+
+                        List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
+
+                        if (facesList.isEmpty()) {
+                            log.warn("Skipping training image '{}' for '{}': no face detected", imagePath.getFileName(), personName);
+                            continue;
+                        }
+
+                        if (facesList.size() > 1) {
+                            log.warn("Skipping training image '{}' for '{}': {} faces detected; training requires exactly one face per image",
+                                imagePath.getFileName(), personName, facesList.size());
+                            continue;
+                        }
+
+                        Rect faceRect = facesList.getFirst();
+                        Mat face = new Mat(img, faceRect);
+
+                        if (face.empty()) {
+                            log.warn("Skipping training image '{}' for '{}': extracted face is empty", imagePath.getFileName(), personName);
+                            matUtil.releaseResources(face);
+                            continue;
+                        }
+
+                        trainingSamples.add(new TrainingImageSample(imagePath, face, personName));
+                        validSamples++;
+                    } finally {
+                        matUtil.releaseResources(img);
+                    }
+                }
+            }
+
+            if (validSamples == 0) {
+                invalidPeople.add(personName);
+            }
+        }
+
+        if (!invalidPeople.isEmpty()) {
+            trainingSamples.forEach(sample -> matUtil.releaseResources(sample.face()));
+            throw new IllegalStateException(
+                "Training requires at least one single-face image per person. No valid training samples found for: "
+                    + String.join(", ", invalidPeople)
+            );
+        }
+
+        if (trainingSamples.isEmpty()) {
+            throw new IllegalStateException("No valid training images found. Each image must contain exactly one detectable face.");
+        }
+
+        MatVector images = new MatVector(trainingSamples.size());
+
+        List<String> strLabels = personFolders.stream()
+            .map(path -> path.getFileName().toString())
+            .toList();
+
+        Mat labels = new Mat(trainingSamples.size(), 1, CV_32SC1);
         IntBuffer labelsBuf = labels.createBuffer();
 
         final AtomicInteger counter = new AtomicInteger();
 
-        fileList.keySet().forEach(path -> {
-
-            Object[] data = fileList.get(path);
-
-            Mat img = matUtil.convertToGray((Mat)data[0]);
+        trainingSamples.forEach(sample -> {
+            Mat extractedFace = sample.face();
+            Mat img = matUtil.convertToGray(extractedFace);
+            matUtil.releaseResources(extractedFace);
 
             images.put(counter.get(), img);
 
-            int imgLabel = strLabels.indexOf(data[1]);
+            int imgLabel = strLabels.indexOf(sample.personName());
 
             labelsBuf.put(counter.get(), imgLabel);
 
