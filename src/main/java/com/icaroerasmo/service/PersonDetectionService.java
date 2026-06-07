@@ -3,19 +3,16 @@ package com.icaroerasmo.service;
 import com.icaroerasmo.properties.AccelerationProperties;
 import com.icaroerasmo.properties.FaceRecognitionProperties;
 import com.icaroerasmo.utils.MatUtil;
+import com.icaroerasmo.utils.OpenCvResourceHelper;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 import org.bytedeco.opencv.opencv_core.*;
 import org.bytedeco.opencv.opencv_dnn.*;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URISyntaxException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -58,8 +55,8 @@ public class PersonDetectionService {
         this.matUtil = matUtil;
         this.dnnInferenceCoordinator = dnnInferenceCoordinator;
         try {
-            String protoPath = getResourcePath(PROTO_FILE);
-            String modelPath = getResourcePath(MODEL_FILE);
+            String protoPath = OpenCvResourceHelper.getResourcePath(PROTO_FILE, PersonDetectionService.class);
+            String modelPath = OpenCvResourceHelper.getResourcePath(MODEL_FILE, PersonDetectionService.class);
 
             log.info("Loading person detection model from: {} and {}", protoPath, modelPath);
             this.net = readNetFromCaffe(protoPath, modelPath);
@@ -80,45 +77,6 @@ public class PersonDetectionService {
             log.error("Failed to load person detection model: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to initialize person detection model", e);
         }
-    }
-
-    /**
-     * Get resource path from classpath or filesystem.
-     * First tries to load from /app/opencv/ (for Docker),
-     * then from classpath resources (for development).
-     */
-    private static String getResourcePath(String resourceName) throws IOException, URISyntaxException {
-        // Extract just the filename from the path
-        String fileName = resourceName.contains("/") ?
-            resourceName.substring(resourceName.lastIndexOf('/') + 1) : resourceName;
-
-        // Try Docker deployment path first
-        File dockerFile = new File("/app/opencv/" + fileName);
-        if (dockerFile.exists()) {
-            log.debug("Loading {} from Docker filesystem: {}", resourceName, dockerFile.getAbsolutePath());
-            return dockerFile.getAbsolutePath();
-        }
-
-        // Try loading from classpath (development/testing)
-        var resource = ClassLoader.getSystemResource(resourceName);
-        if (resource != null) {
-            log.debug("Loading {} from classpath", resourceName);
-            return Path.of(resource.toURI()).toString();
-        }
-
-        // Try extracting from JAR to temp directory
-        try (InputStream is = PersonDetectionService.class.getClassLoader().getResourceAsStream(resourceName)) {
-            if (is != null) {
-                Path tempFile = Files.createTempFile("opencv_", "_" + fileName);
-                Files.copy(is, tempFile, StandardCopyOption.REPLACE_EXISTING);
-                tempFile.toFile().deleteOnExit();
-                log.debug("Extracted {} from JAR to temp file: {}", resourceName, tempFile);
-                return tempFile.toString();
-            }
-        }
-
-        throw new IOException("Resource not found: " + resourceName +
-            ". Checked: /app/opencv/" + fileName + ", classpath:" + resourceName);
     }
 
     /**
