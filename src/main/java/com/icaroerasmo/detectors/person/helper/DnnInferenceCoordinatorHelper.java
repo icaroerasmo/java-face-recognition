@@ -1,4 +1,4 @@
-package com.icaroerasmo.service;
+package com.icaroerasmo.detectors.person.helper;
 
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Component;
@@ -8,7 +8,7 @@ import java.util.function.Supplier;
 
 @Log4j2
 @Component
-public class DnnInferenceCoordinator {
+public class DnnInferenceCoordinatorHelper {
 
     private final ReentrantLock inferenceLock = new ReentrantLock(true);
 

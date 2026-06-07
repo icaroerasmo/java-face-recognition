@@ -1,4 +1,4 @@
-package com.icaroerasmo.service;
+package com.icaroerasmo.detectors.person.services;
 
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Log4j2
 @Service
-public class FaceRecognizerHolder {
+public class FaceRecognizerHolderService {
 
     private final AtomicReference<FaceRecognizer> recognizerRef = new AtomicReference<>();
 

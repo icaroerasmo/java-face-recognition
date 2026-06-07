@@ -1,10 +1,10 @@
 package com.icaroerasmo.config;
 
+import com.icaroerasmo.detectors.person.services.DetectionHistoryService;
 import com.icaroerasmo.properties.TrainingProperties;
-import com.icaroerasmo.service.DetectionHistoryService;
-import com.icaroerasmo.service.FaceRecognitionService;
-import com.icaroerasmo.service.FaceRecognizerHolder;
-import com.icaroerasmo.service.PeopleTrackingService;
+import com.icaroerasmo.detectors.person.services.FaceRecognitionService;
+import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
+import com.icaroerasmo.detectors.person.services.PeopleTrackingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_face.FaceRecognizer;
@@ -26,7 +26,7 @@ public class ScheduledTasks {
 
     private final DetectionHistoryService detectionHistoryService;
     private final FaceRecognitionService faceRecognitionService;
-    private final FaceRecognizerHolder faceRecognizerHolder;
+    private final FaceRecognizerHolderService faceRecognizerHolderService;
     private final TrainingProperties trainingProperties;
     private final PeopleTrackingService peopleTrackingService;
 
@@ -64,7 +64,7 @@ public class ScheduledTasks {
                 log.info("Starting automatic retraining due to detected changes...");
 
                 FaceRecognizer newRecognizer = faceRecognitionService.train(trainingRootPath);
-                faceRecognizerHolder.updateRecognizer(newRecognizer);
+                faceRecognizerHolderService.updateRecognizer(newRecognizer);
 
                 log.info("=== AUTOMATIC RETRAINING COMPLETED SUCCESSFULLY ===");
                 log.info("Model updated in database and active recognizer replaced");

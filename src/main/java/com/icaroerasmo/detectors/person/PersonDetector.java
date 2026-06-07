@@ -1,7 +1,9 @@
-package com.icaroerasmo.service;
+package com.icaroerasmo.detectors.person;
 
+import com.icaroerasmo.detectors.IDetector;
 import com.icaroerasmo.properties.AccelerationProperties;
 import com.icaroerasmo.properties.FaceRecognitionProperties;
+import com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper;
 import com.icaroerasmo.utils.MatUtil;
 import com.icaroerasmo.utils.OpenCvResourceHelper;
 import lombok.extern.log4j.Log4j2;
@@ -10,9 +12,6 @@ import org.bytedeco.opencv.opencv_core.*;
 import org.bytedeco.opencv.opencv_dnn.*;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,7 +28,7 @@ import static org.bytedeco.opencv.global.opencv_imgproc.*;
  */
 @Log4j2
 @Service
-public class PersonDetectionService {
+public class PersonDetector implements IDetector {
 
     private static final String PROTO_FILE = "opencv/SSD_MobileNet_prototxt.txt";
     private static final String MODEL_FILE = "opencv/SSD_MobileNet.caffemodel";
@@ -45,18 +44,18 @@ public class PersonDetectionService {
 
     private final Net net;
     private final MatUtil matUtil;
-    private final DnnInferenceCoordinator dnnInferenceCoordinator;
+    private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
 
-    public PersonDetectionService(
+    public PersonDetector(
             MatUtil matUtil,
             FaceRecognitionProperties faceRecognitionProperties,
-            DnnInferenceCoordinator dnnInferenceCoordinator
+            DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper
     ) {
         this.matUtil = matUtil;
-        this.dnnInferenceCoordinator = dnnInferenceCoordinator;
+        this.dnnInferenceCoordinatorHelper = dnnInferenceCoordinatorHelper;
         try {
-            String protoPath = OpenCvResourceHelper.getResourcePath(PROTO_FILE, PersonDetectionService.class);
-            String modelPath = OpenCvResourceHelper.getResourcePath(MODEL_FILE, PersonDetectionService.class);
+            String protoPath = OpenCvResourceHelper.getResourcePath(PROTO_FILE, PersonDetector.class);
+            String modelPath = OpenCvResourceHelper.getResourcePath(MODEL_FILE, PersonDetector.class);
 
             log.info("Loading person detection model from: {} and {}", protoPath, modelPath);
             this.net = readNetFromCaffe(protoPath, modelPath);
@@ -79,14 +78,7 @@ public class PersonDetectionService {
         }
     }
 
-    /**
-     * Detect people in an image.
-     * THREAD-SAFE: Synchronized to prevent concurrent access to the shared Net object.
-     *
-     * @param image Input image
-     * @return List of rectangles representing detected people
-     */
-    public synchronized List<Rect> detectPeople(Mat image) {
+    public synchronized List<Rect> detect(Mat image) {
         List<Rect> people = new ArrayList<>();
 
         // Validate input
@@ -127,7 +119,7 @@ public class PersonDetectionService {
             }
 
             Mat inferenceBlob = blob;
-            output = dnnInferenceCoordinator.runExclusive("person detection", () -> {
+            output = dnnInferenceCoordinatorHelper.runExclusive("person detection", () -> {
                 // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
                 net.setInput(inferenceBlob);
                 return net.forward();
@@ -231,18 +223,6 @@ public class PersonDetectionService {
         }
 
         return people;
-    }
-
-    /**
-     * Check if there are any people detected in the image.
-     * This is a convenience method that returns a boolean.
-     *
-     * @param image Input image
-     * @return true if at least one person is detected, false otherwise
-     */
-    public boolean hasPeople(Mat image) {
-        List<Rect> people = detectPeople(image);
-        return !people.isEmpty();
     }
 
     private static void configureNet(
