@@ -14,7 +14,6 @@ import org.bytedeco.opencv.opencv_core.Size;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -829,7 +828,7 @@ public class PeopleTrackingService {
                 if (resizeSize != null) {
                     resizeSize.deallocate();
                 }
-                releaseMats(decodedFrame, resizedFrame);
+                MatUtil.deallocateMats(decodedFrame, resizedFrame);
             }
         }
 
@@ -1056,16 +1055,9 @@ public class PeopleTrackingService {
             if (detection == null) {
                 continue;
             }
-            clones.add(new PersonDetection(detection.getPersonName(), cloneRect(detection.getRect())));
+            clones.add(new PersonDetection(detection.getPersonName(), MatUtil.cloneRect(detection.getRect())));
         }
         return clones;
-    }
-
-    private static Rect cloneRect(Rect rect) {
-        if (rect == null) {
-            return null;
-        }
-        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
     }
 
     private static void releasePersonDetections(List<PersonDetection> detections) {
@@ -1073,27 +1065,13 @@ public class PeopleTrackingService {
             return;
         }
 
-        Map<Rect, Boolean> releasedRects = new IdentityHashMap<>();
+        List<Rect> rects = new ArrayList<>(detections.size());
         for (PersonDetection detection : detections) {
-            if (detection == null || detection.getRect() == null) {
-                continue;
-            }
-            if (releasedRects.put(detection.getRect(), Boolean.TRUE) == null) {
-                detection.getRect().deallocate();
+            if (detection != null && detection.getRect() != null) {
+                rects.add(detection.getRect());
             }
         }
-    }
-
-    private static void releaseMats(Mat... mats) {
-        if (mats == null) {
-            return;
-        }
-
-        for (Mat mat : mats) {
-            if (mat != null) {
-                mat.release();
-            }
-        }
+        MatUtil.deallocateRects(rects);
     }
 
     private int getMinTrackingFrames() {

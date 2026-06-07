@@ -352,7 +352,7 @@ public class DeepLearningFaceDetectionService {
                 }
 
                 Detection current = detections.get(i);
-                selected.add(new FaceDetection(cloneRect(current.rect()), current.confidence(), current.landmarks()));
+                selected.add(new FaceDetection(matUtil.cloneRect(current.rect()), current.confidence(), current.landmarks()));
 
                 for (int j = i + 1; j < detections.size(); j++) {
                     if (!suppressed[j] && intersectionOverUnion(current.rect(), detections.get(j).rect()) > NMS_THRESHOLD) {
@@ -400,13 +400,6 @@ public class DeepLearningFaceDetectionService {
 
     private float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(value, max));
-    }
-
-    private Rect cloneRect(Rect rect) {
-        if (rect == null) {
-            return null;
-        }
-        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
     }
 
     public record FaceDetection(Rect rect, float confidence, float[] landmarks) {}
