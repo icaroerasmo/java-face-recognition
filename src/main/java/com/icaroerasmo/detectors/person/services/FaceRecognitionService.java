@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.javacpp.indexer.FloatIndexer;
 import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Rect;
 import org.bytedeco.opencv.opencv_objdetect.FaceRecognizerSF;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -74,7 +75,7 @@ public class FaceRecognitionService {
 
         if (testImage == null || testImage.empty()) {
             log.warn("Cannot perform face recognition on null or empty image");
-            return new FaceRecognition(List.of(), testImage);
+            return new FaceRecognition(List.of());
         }
 
         final double frameArea = testImage.rows() * testImage.cols();
@@ -86,7 +87,7 @@ public class FaceRecognitionService {
             .filter(Objects::nonNull)
             .toList();
 
-        return new FaceRecognition(detectedFaces, testImage);
+        return new FaceRecognition(detectedFaces);
     }
 
     private FaceRecognition.DetectedFaces detectFace(
@@ -139,13 +140,16 @@ public class FaceRecognitionService {
                     String.format("%.4f", faceRatio * 100));
             }
 
-            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, faceDetection.rect());
+            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, cloneRect(faceDetection.rect()));
         } catch (Exception e) {
             log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
                 faceDetection.rect().x(), faceDetection.rect().y(), faceDetection.rect().width(), faceDetection.rect().height(), e);
             return null;
         } finally {
             matUtil.releaseResources(faceBox, alignedFace, feature);
+            if (faceDetection.rect() != null) {
+                faceDetection.rect().deallocate();
+            }
         }
     }
 
@@ -629,6 +633,13 @@ public class FaceRecognitionService {
 
     private double clampSimilarity(double similarity) {
         return Math.max(0.0, Math.min(1.0, similarity));
+    }
+
+    private Rect cloneRect(Rect rect) {
+        if (rect == null) {
+            return null;
+        }
+        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
     }
 
     private record MatchResult(String personName, double distance) {

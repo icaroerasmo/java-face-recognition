@@ -42,10 +42,16 @@ public class MatUtil {
         int textY = rect.y() + rect.height() + textOffset;
         int fontFace = FONT_HERSHEY_SIMPLEX;
         Scalar color = new Scalar(76, 175, 80, 1);
+        Point textPoint = new Point(textX, textY);
         int lineType = LINE_8;
 
-        rectangle(img, rect, color, thickness, lineType, 0);
-        putText(img, text, new Point(textX, textY), fontFace, fontScale, color, thickness, lineType, false);
+        try {
+            rectangle(img, rect, color, thickness, lineType, 0);
+            putText(img, text, textPoint, fontFace, fontScale, color, thickness, lineType, false);
+        } finally {
+            textPoint.deallocate();
+            color.deallocate();
+        }
     }
 
     public void clearMatVector(MatVector images) {

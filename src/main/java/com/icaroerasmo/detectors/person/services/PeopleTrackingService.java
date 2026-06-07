@@ -14,6 +14,7 @@ import org.bytedeco.opencv.opencv_core.Size;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -174,6 +175,11 @@ public class PeopleTrackingService {
                                      byte[] bestImageBytes, byte[] bestFaceHash, List<PersonDetection> allPeople,
                                      int identityFrameCount, int totalTrackedFrames, List<byte[]> allFrameImages) {
         Mat annotatedImg = null;
+        Mat originalImg = null;
+        Mat imageBufferMat = null;
+        BytePointer imagePointer = null;
+        BytePointer buf = null;
+        BytePointer jpgExt = null;
         try {
             log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}, people count={}, identityFrames={}, totalFrames={}, totalFrameImages={}",
                 cameraName, determinedIdentity, String.format("%.2f", bestScore),
@@ -188,12 +194,12 @@ public class PeopleTrackingService {
             boolean isUnknown = isUnknownIdentity(determinedIdentity);
 
             // Convert image bytes to Mat so we can draw on it
-            org.bytedeco.javacpp.BytePointer imagePointer = new org.bytedeco.javacpp.BytePointer(bestImageBytes);
-            Mat originalImg = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
-                new org.bytedeco.opencv.opencv_core.Mat(imagePointer),
+            imagePointer = new org.bytedeco.javacpp.BytePointer(bestImageBytes);
+            imageBufferMat = new org.bytedeco.opencv.opencv_core.Mat(imagePointer);
+            originalImg = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
+                imageBufferMat,
                 org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_COLOR
             );
-            imagePointer.deallocate();
 
             if (originalImg.empty()) {
                 log.error("Failed to decode image bytes to Mat");
@@ -202,7 +208,6 @@ public class PeopleTrackingService {
 
             // Clone the image and draw rectangle on it
             annotatedImg = originalImg.clone();
-            matUtil.releaseResources(originalImg); // Release original, keep annotated
 
             // Draw rectangles around ALL detected people using the DETERMINED identity from tracking
             // Since tracking happens per person, we only draw for the person being tracked
@@ -223,13 +228,11 @@ public class PeopleTrackingService {
             }
 
             // Convert annotated image back to bytes
-            org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
-            org.bytedeco.javacpp.BytePointer jpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
+            buf = new org.bytedeco.javacpp.BytePointer();
+            jpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
             org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, annotatedImg, buf);
             byte[] annotatedImageBytes = new byte[(int) buf.limit()];
             buf.get(annotatedImageBytes);
-            buf.deallocate();
-            jpgExt.deallocate();
 
             // Compute image hash for detection history
             String imageHash = detectionHistoryService.computeImageHash(annotatedImageBytes);
@@ -297,6 +300,21 @@ public class PeopleTrackingService {
         } catch (Exception e) {
             log.error("❌ FAILED to send notification for camera '{}': {}", cameraName, e.getMessage(), e);
         } finally {
+            if (imagePointer != null) {
+                imagePointer.deallocate();
+            }
+            if (imageBufferMat != null) {
+                imageBufferMat.deallocate();
+            }
+            if (buf != null) {
+                buf.deallocate();
+            }
+            if (jpgExt != null) {
+                jpgExt.deallocate();
+            }
+            if (originalImg != null) {
+                matUtil.releaseResources(originalImg);
+            }
             // Clean up the annotated image
             if (annotatedImg != null) {
                 matUtil.releaseResources(annotatedImg);
@@ -647,7 +665,15 @@ public class PeopleTrackingService {
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
             this.maxGifFrames = maxGifFrames;
-            FaceObservation observation = new FaceObservation(initialRect, initialFaceHash, timestamp, distanceScore, personName, allPeople, hasVisibleFace);
+            FaceObservation observation = new FaceObservation(
+                initialRect,
+                initialFaceHash,
+                timestamp,
+                distanceScore,
+                personName,
+                clonePersonDetections(allPeople),
+                hasVisibleFace
+            );
             this.observations.add(observation);
             this.bestObservation = observation; // First is best by default
             this.bestImageBytes = imageBytes;
@@ -670,7 +696,15 @@ public class PeopleTrackingService {
                 boolean hasVisibleFace
         ) {
             this.lastSeen = timestamp;
-            FaceObservation observation = new FaceObservation(rect, faceHash, timestamp, distanceScore, personName, allPeople, hasVisibleFace);
+            FaceObservation observation = new FaceObservation(
+                rect,
+                faceHash,
+                timestamp,
+                distanceScore,
+                personName,
+                clonePersonDetections(allPeople),
+                hasVisibleFace
+            );
             this.observations.add(observation);
             storeGifFrame(imageBytes);
 
@@ -732,13 +766,16 @@ public class PeopleTrackingService {
             BytePointer imagePointer = null;
             BytePointer jpgExt = null;
             BytePointer outputBuffer = null;
+            Mat encodedInputMat = null;
             Mat decodedFrame = null;
             Mat resizedFrame = null;
+            Size resizeSize = null;
 
             try {
                 imagePointer = new BytePointer(imageBytes);
+                encodedInputMat = new org.bytedeco.opencv.opencv_core.Mat(imagePointer);
                 decodedFrame = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
-                    new org.bytedeco.opencv.opencv_core.Mat(imagePointer),
+                    encodedInputMat,
                     org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_COLOR
                 );
 
@@ -755,10 +792,11 @@ public class PeopleTrackingService {
                 ));
 
                 resizedFrame = new Mat();
+                resizeSize = new Size(GIF_FRAME_MAX_WIDTH, scaledHeight);
                 org.bytedeco.opencv.global.opencv_imgproc.resize(
                     decodedFrame,
                     resizedFrame,
-                    new Size(GIF_FRAME_MAX_WIDTH, scaledHeight)
+                    resizeSize
                 );
 
                 if (resizedFrame.empty()) {
@@ -785,14 +823,13 @@ public class PeopleTrackingService {
                 if (outputBuffer != null) {
                     outputBuffer.deallocate();
                 }
-                if (decodedFrame != null) {
-                    decodedFrame.releaseReference();
-                    decodedFrame.deallocate();
+                if (encodedInputMat != null) {
+                    encodedInputMat.deallocate();
                 }
-                if (resizedFrame != null) {
-                    resizedFrame.releaseReference();
-                    resizedFrame.deallocate();
+                if (resizeSize != null) {
+                    resizeSize.deallocate();
                 }
+                releaseMats(decodedFrame, resizedFrame);
             }
         }
 
@@ -964,6 +1001,7 @@ public class PeopleTrackingService {
                 if (observation.rect != null) {
                     observation.rect.deallocate();
                 }
+                releasePersonDetections(observation.allPeople);
             }
             gifFrames.clear();
             observations.clear();
@@ -1006,6 +1044,56 @@ public class PeopleTrackingService {
 
     private static boolean isUnknownIdentity(String personName) {
         return personName == null || UNKNOWN_IDENTITY.equalsIgnoreCase(personName) || personName.toLowerCase().contains("unknown");
+    }
+
+    private static List<PersonDetection> clonePersonDetections(List<PersonDetection> detections) {
+        if (detections == null || detections.isEmpty()) {
+            return List.of();
+        }
+
+        List<PersonDetection> clones = new ArrayList<>(detections.size());
+        for (PersonDetection detection : detections) {
+            if (detection == null) {
+                continue;
+            }
+            clones.add(new PersonDetection(detection.getPersonName(), cloneRect(detection.getRect())));
+        }
+        return clones;
+    }
+
+    private static Rect cloneRect(Rect rect) {
+        if (rect == null) {
+            return null;
+        }
+        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
+    }
+
+    private static void releasePersonDetections(List<PersonDetection> detections) {
+        if (detections == null || detections.isEmpty()) {
+            return;
+        }
+
+        Map<Rect, Boolean> releasedRects = new IdentityHashMap<>();
+        for (PersonDetection detection : detections) {
+            if (detection == null || detection.getRect() == null) {
+                continue;
+            }
+            if (releasedRects.put(detection.getRect(), Boolean.TRUE) == null) {
+                detection.getRect().deallocate();
+            }
+        }
+    }
+
+    private static void releaseMats(Mat... mats) {
+        if (mats == null) {
+            return;
+        }
+
+        for (Mat mat : mats) {
+            if (mat != null) {
+                mat.release();
+            }
+        }
     }
 
     private int getMinTrackingFrames() {
