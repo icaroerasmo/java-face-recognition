@@ -19,7 +19,6 @@ face-recognition:
         url: "rtsp://<host>:<port>/<stream>"
         protocol: TCP
   training:
-    dataset-path: "<path-to-trained-dataset.xml>"
     root-folder: "<training-folder>"
   acceleration:
     backend: OPENCV
@@ -58,12 +57,13 @@ Each entry defines one RTSP source.
 
 ## `face-recognition.training`
 
-Controls where the application loads or stores training data.
+Controls where the application reads the training image folders used to build or refresh the stored face gallery.
 
 | Property | Type | Default | Description |
 |---|---|---:|---|
-| `face-recognition.training.dataset-path` | string | `trained_dataset.xml` | Relative or absolute path to the trained dataset XML file used by the recognition pipeline. |
 | `face-recognition.training.root-folder` | string | `train` | Folder containing the training images used to build or refresh the dataset. |
+
+The application persists the generated face-recognition gallery in SQLite; there is no longer a separate configurable dataset file path.
 
 ## `face-recognition.acceleration`
 
@@ -99,3 +99,4 @@ Controls Telegram notification delivery and animation rendering.
 
 1. Spring Boot relaxed binding accepts kebab-case keys in YAML and also supports equivalent environment-variable mappings.
 2. If you raise `processing-fps`, consider reviewing `frame-queue-capacity`, `tracking-max-frames`, `gif-fps`, and `gif-max-frames` too, because all four affect CPU usage, memory usage, and perceived latency.
+3. On the `feature/object-detection-refactor` branch, face recognition uses SCRFD face detection plus SFace (`FaceRecognizerSF`) embeddings stored in SQLite, not LBPH model files.

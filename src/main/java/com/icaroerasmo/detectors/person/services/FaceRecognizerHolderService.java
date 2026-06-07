@@ -1,7 +1,6 @@
 package com.icaroerasmo.detectors.person.services;
 
 import lombok.extern.log4j.Log4j2;
-import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.atomic.AtomicReference;
@@ -14,13 +13,13 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class FaceRecognizerHolderService {
 
-    private final AtomicReference<FaceRecognizer> recognizerRef = new AtomicReference<>();
+    private final AtomicReference<FaceRecognitionRuntime> recognizerRef = new AtomicReference<>();
 
     /**
      * Get the current FaceRecognizer instance
      * @return the current recognizer, or null if not initialized
      */
-    public FaceRecognizer get() {
+    public FaceRecognitionRuntime get() {
         return recognizerRef.get();
     }
 
@@ -29,13 +28,12 @@ public class FaceRecognizerHolderService {
      * @param newRecognizer the new recognizer to use
      * @return the old recognizer that was replaced
      */
-    public FaceRecognizer updateRecognizer(FaceRecognizer newRecognizer) {
-        FaceRecognizer oldRecognizer = recognizerRef.getAndSet(newRecognizer);
+    public FaceRecognitionRuntime updateRecognizer(FaceRecognitionRuntime newRecognizer) {
+        FaceRecognitionRuntime oldRecognizer = recognizerRef.getAndSet(newRecognizer);
         
         if (oldRecognizer != null) {
             log.info("FaceRecognizer updated - old instance will be closed");
             try {
-                // Close the old recognizer to free resources
                 oldRecognizer.close();
             } catch (Exception e) {
                 log.warn("Error closing old FaceRecognizer", e);

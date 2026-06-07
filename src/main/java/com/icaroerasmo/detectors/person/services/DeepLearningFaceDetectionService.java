@@ -80,8 +80,8 @@ public class DeepLearningFaceDetectionService {
      * THREAD-SAFE: Synchronized to prevent concurrent access to the shared Net object,
      * which was causing false detections when multiple cameras were processing frames simultaneously.
      */
-    public synchronized List<Rect> detect(Mat testImage) {
-        List<Rect> faces = new ArrayList<>();
+    public synchronized List<FaceDetection> detect(Mat testImage) {
+        List<FaceDetection> faces = new ArrayList<>();
 
         // Validate input
         if (testImage == null || testImage.empty()) {
@@ -195,28 +195,35 @@ public class DeepLearningFaceDetectionService {
             int stride = SCRFD_STRIDES[strideIndex];
             Mat scores = outputByName.get("score_" + stride);
             Mat boxes = outputByName.get("bbox_" + stride);
+            Mat keypoints = outputByName.get("kps_" + stride);
 
-            if (scores == null || scores.empty() || boxes == null || boxes.empty()) {
-                log.warn("SCRFD outputs missing for stride {} (score present: {}, bbox present: {})",
-                        stride, scores != null && !scores.empty(), boxes != null && !boxes.empty());
+            if (scores == null || scores.empty() || boxes == null || boxes.empty() || keypoints == null || keypoints.empty()) {
+                log.warn("SCRFD outputs missing for stride {} (score present: {}, bbox present: {}, kps present: {})",
+                        stride,
+                        scores != null && !scores.empty(),
+                        boxes != null && !boxes.empty(),
+                        keypoints != null && !keypoints.empty());
                 continue;
             }
 
             FloatIndexer scoreIndexer = null;
             FloatIndexer boxIndexer = null;
+            FloatIndexer keypointIndexer = null;
             try {
                 scoreIndexer = scores.createIndexer();
                 boxIndexer = boxes.createIndexer();
+                keypointIndexer = keypoints.createIndexer();
 
                 int featureWidth = MODEL_INPUT_SIZE / stride;
                 int featureHeight = MODEL_INPUT_SIZE / stride;
                 int anchorCount = featureWidth * featureHeight * SCRFD_ANCHORS_PER_LOCATION;
                 long scoreEntries = getAnchoredEntryCount(scoreIndexer);
                 long boxEntries = getAnchoredEntryCount(boxIndexer);
+                long keypointEntries = getAnchoredEntryCount(keypointIndexer);
 
-                if (scoreEntries < anchorCount || boxEntries < anchorCount) {
-                    log.warn("SCRFD output shape mismatch for stride {}: expected at least {} anchors, got scores={} boxes={}",
-                            stride, anchorCount, scoreEntries, boxEntries);
+                if (scoreEntries < anchorCount || boxEntries < anchorCount || keypointEntries < anchorCount) {
+                    log.warn("SCRFD output shape mismatch for stride {}: expected at least {} anchors, got scores={} boxes={} keypoints={}",
+                            stride, anchorCount, scoreEntries, boxEntries, keypointEntries);
                     continue;
                 }
 
@@ -246,7 +253,15 @@ public class DeepLearningFaceDetectionService {
                         continue;
                     }
 
-                    detections.add(new Detection(new Rect(x1, y1, x2 - x1, y2 - y1), confidence));
+                    float[] landmarks = new float[10];
+                    for (int landmarkIndex = 0; landmarkIndex < 5; landmarkIndex++) {
+                        float landmarkX = (anchorCenterX + getKeypointCoordinate(keypointIndexer, anchorIndex, landmarkIndex * 2) * stride) / scale;
+                        float landmarkY = (anchorCenterY + getKeypointCoordinate(keypointIndexer, anchorIndex, landmarkIndex * 2 + 1) * stride) / scale;
+                        landmarks[landmarkIndex * 2] = clamp(landmarkX, 0, originalWidth - 1);
+                        landmarks[landmarkIndex * 2 + 1] = clamp(landmarkY, 0, originalHeight - 1);
+                    }
+
+                    detections.add(new Detection(new Rect(x1, y1, x2 - x1, y2 - y1), confidence, landmarks));
                 }
             } finally {
                 if (scoreIndexer != null) {
@@ -254,6 +269,9 @@ public class DeepLearningFaceDetectionService {
                 }
                 if (boxIndexer != null) {
                     boxIndexer.release();
+                }
+                if (keypointIndexer != null) {
+                    keypointIndexer.release();
                 }
             }
         }
@@ -295,8 +313,18 @@ public class DeepLearningFaceDetectionService {
         return indexer.get(anchorIndex * 4L + coordinateIndex);
     }
 
-    private List<Rect> applyNms(List<Detection> detections) {
-        List<Rect> selected = new ArrayList<>();
+    private float getKeypointCoordinate(FloatIndexer indexer, int anchorIndex, int coordinateIndex) {
+        if (indexer.rank() >= 3) {
+            return indexer.get(0, anchorIndex, coordinateIndex);
+        }
+        if (indexer.rank() == 2) {
+            return indexer.get(anchorIndex, coordinateIndex);
+        }
+        return indexer.get(anchorIndex * 10L + coordinateIndex);
+    }
+
+    private List<FaceDetection> applyNms(List<Detection> detections) {
+        List<FaceDetection> selected = new ArrayList<>();
         boolean[] suppressed = new boolean[detections.size()];
 
         for (int i = 0; i < detections.size() && selected.size() < MAX_DETECTIONS; i++) {
@@ -305,7 +333,7 @@ public class DeepLearningFaceDetectionService {
             }
 
             Detection current = detections.get(i);
-            selected.add(current.rect());
+            selected.add(new FaceDetection(current.rect(), current.confidence(), current.landmarks()));
 
             for (int j = i + 1; j < detections.size(); j++) {
                 if (!suppressed[j] && intersectionOverUnion(current.rect(), detections.get(j).rect()) > NMS_THRESHOLD) {
@@ -344,7 +372,13 @@ public class DeepLearningFaceDetectionService {
         return Math.max(min, Math.min(value, max));
     }
 
-    private record Detection(Rect rect, float confidence) {}
+    private float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(value, max));
+    }
+
+    public record FaceDetection(Rect rect, float confidence, float[] landmarks) {}
+
+    private record Detection(Rect rect, float confidence, float[] landmarks) {}
 
     private static void configureNet(
             Net net,

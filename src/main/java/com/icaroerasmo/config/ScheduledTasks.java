@@ -4,10 +4,10 @@ import com.icaroerasmo.detectors.person.services.DetectionHistoryService;
 import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.detectors.person.services.FaceRecognitionService;
 import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
+import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
 import com.icaroerasmo.detectors.person.services.PeopleTrackingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -63,7 +63,7 @@ public class ScheduledTasks {
                 log.warn("=== TRAINING DATA CHANGES DETECTED ===");
                 log.info("Starting automatic retraining due to detected changes...");
 
-                FaceRecognizer newRecognizer = faceRecognitionService.train(trainingRootPath);
+                FaceRecognitionRuntime newRecognizer = faceRecognitionService.train(trainingRootPath);
                 faceRecognizerHolderService.updateRecognizer(newRecognizer);
 
                 log.info("=== AUTOMATIC RETRAINING COMPLETED SUCCESSFULLY ===");

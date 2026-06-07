@@ -1,182 +1,159 @@
 package com.icaroerasmo.detectors.person.services;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.icaroerasmo.model.FaceRecognition;
-import com.icaroerasmo.utils.MatUtil;
-import com.icaroerasmo.properties.TrainingProperties;
-import com.icaroerasmo.repository.TrainingMetadataRepository;
 import com.icaroerasmo.repository.TrainedDatasetRepository;
-import com.icaroerasmo.repository.entity.TrainingMetadata;
+import com.icaroerasmo.repository.TrainingMetadataRepository;
 import com.icaroerasmo.repository.entity.TrainedDataset;
+import com.icaroerasmo.repository.entity.TrainingMetadata;
+import com.icaroerasmo.utils.MatUtil;
+import com.icaroerasmo.utils.OpenCvResourceHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.bytedeco.opencv.opencv_core.*;
+import org.bytedeco.javacpp.indexer.FloatIndexer;
+import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_objdetect.FaceRecognizerSF;
 import org.springframework.stereotype.Service;
-import org.bytedeco.javacpp.DoublePointer;
-import org.bytedeco.javacpp.IntPointer;
-import org.bytedeco.opencv.opencv_face.FaceRecognizer;
-import org.bytedeco.opencv.opencv_face.LBPHFaceRecognizer;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.stream.Collectors.toMap;
-import static org.bytedeco.opencv.global.opencv_core.CV_32SC1;
-import static org.bytedeco.opencv.global.opencv_imgcodecs.*;
+import static org.bytedeco.opencv.global.opencv_core.CV_32FC1;
+import static org.bytedeco.opencv.global.opencv_imgcodecs.imread;
 
 @Log4j2
 @Service
 @RequiredArgsConstructor
 public class FaceRecognitionService {
 
-    private record TrainingImageSample(Path imagePath, Mat face, String personName) {
-    }
+    private static final String SFACE_MODEL_FILE = "opencv/face_recognition_sface_2021dec.onnx";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<StoredGallery> GALLERY_TYPE = new TypeReference<>() {};
 
-    private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
-    private final MatUtil matUtil;
-    private final TrainingProperties trainingProperties;
-    private final TrainingMetadataRepository trainingMetadataRepository;
-    private final TrainedDatasetRepository trainedDatasetRepository;
-
-    // Base distance threshold for reference (medium-sized faces at typical resolution)
-    public static final double BASE_DISTANCE = 60.0;
+    // Normalized distance (1 - cosine similarity). Lower = better.
+    public static final double BASE_DISTANCE = 0.55;
     public static final String UNKNOWN = "Unknown";
 
     // Expected face ratio for calibration (5% of frame area is typical for good recognition)
     private static final double EXPECTED_FACE_RATIO = 0.05;
 
-    // Min and max adaptive thresholds
-    private static final double MIN_ADAPTIVE_THRESHOLD = 30.0;
-    private static final double MAX_ADAPTIVE_THRESHOLD = 90.0;
+    // Min and max adaptive thresholds for normalized distance.
+    private static final double MIN_ADAPTIVE_THRESHOLD = 0.45;
+    private static final double MAX_ADAPTIVE_THRESHOLD = 0.60;
 
-    public FaceRecognizer load() {
-        FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
+    private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
+    private final MatUtil matUtil;
+    private final TrainingMetadataRepository trainingMetadataRepository;
+    private final TrainedDatasetRepository trainedDatasetRepository;
+
+    public FaceRecognitionRuntime load() {
         TrainedDataset trained = trainedDatasetRepository.findAll().stream().findFirst()
-                .orElseThrow(() -> new IllegalStateException("No trained dataset found in database"));
-        Path tmp = null;
-        try {
-            tmp = Files.createTempFile("trained_dataset", ".xml");
-            Files.write(tmp, trained.getModelXml());
-            faceRecognizer.read(tmp.toString());
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to load trained dataset from database", e);
-        } finally {
-            if (tmp != null) {
-                try {
-                    Files.deleteIfExists(tmp);
-                } catch (IOException ignore) {
-                }
-            }
-        }
-        return faceRecognizer;
+            .orElseThrow(() -> new IllegalStateException("No trained dataset found in database"));
+
+        StoredGallery storedGallery = deserializeGallery(trained.getModelXml());
+        FaceRecognizerSF recognizer = createRecognizer();
+        Map<String, List<Mat>> galleryFeatures = buildRuntimeGallery(storedGallery.embeddings());
+        return new FaceRecognitionRuntime(recognizer, galleryFeatures);
     }
 
     /**
      * Test face recognition on an image.
-     * The FaceRecognizer.predict() operation is synchronized per recognizer instance
-     * to prevent race conditions when multiple cameras are processing frames simultaneously.
      */
-    public FaceRecognition test(FaceRecognizer faceRecognizer, Mat testImage) {
+    public FaceRecognition test(FaceRecognitionRuntime faceRecognitionRuntime, Mat testImage) {
 
-        // Validate input
         if (testImage == null || testImage.empty()) {
             log.warn("Cannot perform face recognition on null or empty image");
             return new FaceRecognition(List.of(), testImage);
         }
 
-        // Calculate frame area for adaptive threshold calculation
         final double frameArea = testImage.rows() * testImage.cols();
         log.debug("Frame resolution: {}x{}, total area: {} pixels",
-            testImage.cols(), testImage.rows(), (long)frameArea);
+            testImage.cols(), testImage.rows(), (long) frameArea);
 
-        List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream().map(faceRect -> {
-
-            Mat extractedFace = null;
-            Mat img = null;
-
-            try {
-                // Extract the face region
-                extractedFace = new Mat(testImage, faceRect);
-
-                // Validate that the extracted face is not empty
-                if (extractedFace.empty()) {
-                    log.warn("Extracted face Mat is empty for rect: x={}, y={}, width={}, height={}",
-                            faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
-                    return null;
-                }
-
-                // Validate dimensions
-                if (extractedFace.rows() <= 0 || extractedFace.cols() <= 0) {
-                    log.warn("Extracted face has invalid dimensions: rows={}, cols={}",
-                            extractedFace.rows(), extractedFace.cols());
-                    return null;
-                }
-
-                img = matUtil.convertToGray(extractedFace);
-
-                if (img.empty()) {
-                    log.warn("Converted gray image is empty");
-                    return null;
-                }
-
-                IntPointer detectedPersonPtr = new IntPointer(1);
-                DoublePointer distancePtr = new DoublePointer(1);
-
-                // CRITICAL: Synchronize on the FaceRecognizer instance to prevent concurrent access
-                // The recognizer maintains internal state that can be corrupted by concurrent predictions
-                synchronized (faceRecognizer) {
-                    faceRecognizer.predict(img, detectedPersonPtr, distancePtr);
-
-                    String label = faceRecognizer.getLabelInfo(detectedPersonPtr.get(0)).getString();
-                    String detectedPerson = sanitizeLabel(label);
-                    double detectionDistance = distancePtr.get(0);
-
-                    // Calculate adaptive threshold based on face size relative to frame
-                    double faceArea = faceRect.width() * faceRect.height();
-                    double faceRatio = faceArea / frameArea;
-                    double adaptiveThreshold = calculateAdaptiveThreshold(faceRatio);
-
-                    if (detectionDistance > adaptiveThreshold) {
-                        log.debug("Detected person is {} with distance {} (adaptive threshold: {}, face ratio: {}%) - classified as {}",
-                                detectedPerson,
-                                String.format("%.2f", detectionDistance),
-                                String.format("%.2f", adaptiveThreshold),
-                                String.format("%.4f", faceRatio * 100),
-                                UNKNOWN);
-                        detectedPerson = UNKNOWN;
-                    } else {
-                        log.debug("Detected person is {} with distance {} (adaptive threshold: {}, face ratio: {}%)",
-                                detectedPerson,
-                                String.format("%.2f", detectionDistance),
-                                String.format("%.2f", adaptiveThreshold),
-                                String.format("%.4f", faceRatio * 100));
-                    }
-
-                    return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, faceRect);
-                }
-            } catch(Exception e) {
-                log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
-                        faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height(), e);
-                return null;
-            } finally {
-                matUtil.releaseResources(extractedFace, img);
-            }
-        }).filter(detected -> detected != null).toList();
+        List<FaceRecognition.DetectedFaces> detectedFaces = deepLearningFaceDetectionService.detect(testImage).stream()
+            .map(faceDetection -> detectFace(faceRecognitionRuntime, testImage, faceDetection, frameArea))
+            .filter(Objects::nonNull)
+            .toList();
 
         return new FaceRecognition(detectedFaces, testImage);
     }
 
-    @Transactional
-    public FaceRecognizer train(Path rootFolder) throws IOException {
-        Path rootFolderPath = rootFolder;
+    private FaceRecognition.DetectedFaces detectFace(
+        FaceRecognitionRuntime faceRecognitionRuntime,
+        Mat testImage,
+        DeepLearningFaceDetectionService.FaceDetection faceDetection,
+        double frameArea
+    ) {
+        Mat faceBox = null;
+        Mat alignedFace = null;
+        Mat feature = null;
 
+        try {
+            faceBox = createFaceBoxMat(faceDetection);
+            alignedFace = new Mat();
+            feature = new Mat();
+
+            synchronized (faceRecognitionRuntime.getRecognizer()) {
+                faceRecognitionRuntime.getRecognizer().alignCrop(testImage, faceBox, alignedFace);
+                faceRecognitionRuntime.getRecognizer().feature(alignedFace, feature);
+            }
+
+            if (alignedFace.empty() || feature.empty()) {
+                log.warn("Failed to align or extract features for face at x={}, y={}, width={}, height={}",
+                    faceDetection.rect().x(), faceDetection.rect().y(), faceDetection.rect().width(), faceDetection.rect().height());
+                return null;
+            }
+
+            MatchResult matchResult = matchAgainstGallery(faceRecognitionRuntime, feature);
+            double detectionDistance = matchResult.distance();
+            String detectedPerson = matchResult.personName();
+
+            double faceArea = faceDetection.rect().width() * faceDetection.rect().height();
+            double faceRatio = faceArea / frameArea;
+            double adaptiveThreshold = calculateAdaptiveThreshold(faceRatio);
+
+            if (detectionDistance > adaptiveThreshold) {
+                log.debug("Detected person is {} with normalized distance {} (adaptive threshold: {}, face ratio: {}%) - classified as {}",
+                    detectedPerson,
+                    String.format("%.4f", detectionDistance),
+                    String.format("%.4f", adaptiveThreshold),
+                    String.format("%.4f", faceRatio * 100),
+                    UNKNOWN);
+                detectedPerson = UNKNOWN;
+            } else {
+                log.debug("Detected person is {} with normalized distance {} (adaptive threshold: {}, face ratio: {}%)",
+                    detectedPerson,
+                    String.format("%.4f", detectionDistance),
+                    String.format("%.4f", adaptiveThreshold),
+                    String.format("%.4f", faceRatio * 100));
+            }
+
+            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, faceDetection.rect());
+        } catch (Exception e) {
+            log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
+                faceDetection.rect().x(), faceDetection.rect().y(), faceDetection.rect().width(), faceDetection.rect().height(), e);
+            return null;
+        } finally {
+            matUtil.releaseResources(faceBox, alignedFace, feature);
+        }
+    }
+
+    @Transactional
+    public FaceRecognitionRuntime train(Path rootFolder) throws IOException {
+        Path rootFolderPath = rootFolder;
         List<Path> personFolders;
+
         try (var rootStream = Files.list(rootFolderPath)) {
             personFolders = rootStream
                 .filter(Files::isDirectory)
@@ -184,144 +161,110 @@ public class FaceRecognitionService {
                 .toList();
         }
 
-        List<TrainingImageSample> trainingSamples = new ArrayList<>();
+        FaceRecognizerSF recognizer = createRecognizer();
+        Map<String, List<Mat>> runtimeGallery = new HashMap<>();
+        Map<String, List<float[]>> storedGallery = new HashMap<>();
         List<String> invalidPeople = new ArrayList<>();
 
-        for (Path personFolder : personFolders) {
-            String personName = personFolder.getFileName().toString();
-            int validSamples = 0;
+        try {
+            for (Path personFolder : personFolders) {
+                String personName = personFolder.getFileName().toString();
+                List<Mat> personRuntimeEmbeddings = new ArrayList<>();
+                List<float[]> personStoredEmbeddings = new ArrayList<>();
 
-            try (var personImagesStream = Files.list(personFolder)) {
-                List<Path> personImages = personImagesStream
-                    .filter(Files::isRegularFile)
-                    .sorted()
-                    .toList();
+                try (var personImagesStream = Files.list(personFolder)) {
+                    List<Path> personImages = personImagesStream
+                        .filter(Files::isRegularFile)
+                        .sorted()
+                        .toList();
 
-                for (Path imagePath : personImages) {
-                    Mat img = imread(imagePath.toString());
+                    for (Path imagePath : personImages) {
+                        Mat img = imread(imagePath.toString());
+                        Mat faceBox = null;
+                        Mat alignedFace = null;
+                        Mat feature = null;
 
-                    try {
-                        if (img.empty()) {
-                            log.warn("Skipping unreadable training image '{}' for '{}'", imagePath.getFileName(), personName);
-                            continue;
+                        try {
+                            if (img.empty()) {
+                                log.warn("Skipping unreadable training image '{}' for '{}'", imagePath.getFileName(), personName);
+                                continue;
+                            }
+
+                            List<DeepLearningFaceDetectionService.FaceDetection> facesList = deepLearningFaceDetectionService.detect(img);
+
+                            if (facesList.isEmpty()) {
+                                log.warn("Skipping training image '{}' for '{}': no face detected", imagePath.getFileName(), personName);
+                                continue;
+                            }
+
+                            if (facesList.size() > 1) {
+                                log.warn("Skipping training image '{}' for '{}': {} faces detected; training requires exactly one face per image",
+                                    imagePath.getFileName(), personName, facesList.size());
+                                continue;
+                            }
+
+                            faceBox = createFaceBoxMat(facesList.getFirst());
+                            alignedFace = new Mat();
+                            feature = new Mat();
+
+                            synchronized (recognizer) {
+                                recognizer.alignCrop(img, faceBox, alignedFace);
+                                recognizer.feature(alignedFace, feature);
+                            }
+
+                            if (alignedFace.empty() || feature.empty()) {
+                                log.warn("Skipping training image '{}' for '{}': failed to extract face embedding",
+                                    imagePath.getFileName(), personName);
+                                continue;
+                            }
+
+                            personRuntimeEmbeddings.add(feature.clone());
+                            personStoredEmbeddings.add(extractFeatureVector(feature));
+                        } finally {
+                            matUtil.releaseResources(img, faceBox, alignedFace, feature);
                         }
-
-                        List<Rect> facesList = deepLearningFaceDetectionService.detect(img);
-
-                        if (facesList.isEmpty()) {
-                            log.warn("Skipping training image '{}' for '{}': no face detected", imagePath.getFileName(), personName);
-                            continue;
-                        }
-
-                        if (facesList.size() > 1) {
-                            log.warn("Skipping training image '{}' for '{}': {} faces detected; training requires exactly one face per image",
-                                imagePath.getFileName(), personName, facesList.size());
-                            continue;
-                        }
-
-                        Rect faceRect = facesList.getFirst();
-                        Mat face = new Mat(img, faceRect);
-
-                        if (face.empty()) {
-                            log.warn("Skipping training image '{}' for '{}': extracted face is empty", imagePath.getFileName(), personName);
-                            matUtil.releaseResources(face);
-                            continue;
-                        }
-
-                        trainingSamples.add(new TrainingImageSample(imagePath, face, personName));
-                        validSamples++;
-                    } finally {
-                        matUtil.releaseResources(img);
                     }
                 }
+
+                if (personStoredEmbeddings.isEmpty()) {
+                    invalidPeople.add(personName);
+                    releaseGalleryFeatures(personRuntimeEmbeddings);
+                    continue;
+                }
+
+                runtimeGallery.put(personName, personRuntimeEmbeddings);
+                storedGallery.put(personName, personStoredEmbeddings);
             }
 
-            if (validSamples == 0) {
-                invalidPeople.add(personName);
+            if (!invalidPeople.isEmpty()) {
+                throw new IllegalStateException(
+                    "Training requires at least one single-face image per person. No valid training samples found for: "
+                        + String.join(", ", invalidPeople)
+                );
             }
+
+            if (storedGallery.isEmpty()) {
+                throw new IllegalStateException("No valid training images found. Each image must contain exactly one detectable face.");
+            }
+
+            saveTrainedDatasetWithRetry(serializeGallery(storedGallery));
+            saveTrainingMetadataWithRetry(computePersonHashes(rootFolderPath));
+
+            return new FaceRecognitionRuntime(recognizer, runtimeGallery);
+        } catch (IOException | RuntimeException e) {
+            releaseRuntimeGallery(runtimeGallery);
+            try {
+                recognizer.close();
+            } catch (Exception ignore) {
+            }
+            throw e;
         }
-
-        if (!invalidPeople.isEmpty()) {
-            trainingSamples.forEach(sample -> matUtil.releaseResources(sample.face()));
-            throw new IllegalStateException(
-                "Training requires at least one single-face image per person. No valid training samples found for: "
-                    + String.join(", ", invalidPeople)
-            );
-        }
-
-        if (trainingSamples.isEmpty()) {
-            throw new IllegalStateException("No valid training images found. Each image must contain exactly one detectable face.");
-        }
-
-        MatVector images = new MatVector(trainingSamples.size());
-
-        List<String> strLabels = personFolders.stream()
-            .map(path -> path.getFileName().toString())
-            .toList();
-
-        Mat labels = new Mat(trainingSamples.size(), 1, CV_32SC1);
-        IntBuffer labelsBuf = labels.createBuffer();
-
-        final AtomicInteger counter = new AtomicInteger();
-
-        trainingSamples.forEach(sample -> {
-            Mat extractedFace = sample.face();
-            Mat img = matUtil.convertToGray(extractedFace);
-            matUtil.releaseResources(extractedFace);
-
-            images.put(counter.get(), img);
-
-            int imgLabel = strLabels.indexOf(sample.personName());
-
-            labelsBuf.put(counter.get(), imgLabel);
-
-            counter.getAndIncrement();
-        });
-
-        FaceRecognizer faceRecognizer = LBPHFaceRecognizer.create();
-
-        faceRecognizer.train(images, labels);
-
-        strLabels.forEach(label -> {
-            faceRecognizer.setLabelInfo(strLabels.indexOf(label), new String(label.getBytes(UTF_8)));
-        });
-
-        java.nio.file.Path tmp = java.nio.file.Files.createTempFile("trained_dataset", ".xml");
-        faceRecognizer.write(tmp.toString());
-        byte[] xmlBytes = java.nio.file.Files.readAllBytes(tmp);
-        java.nio.file.Files.deleteIfExists(tmp);
-
-        // Save to database with retry logic for SQLite lock contention
-        saveTrainedDatasetWithRetry(xmlBytes);
-
-        matUtil.clearMatVector(images);
-
-        Map<String, String> personHashes = new java.util.HashMap<>();
-
-        // Properly close the stream to avoid resource leaks
-        try (var stream = Files.list(rootFolderPath)) {
-            stream.filter(path -> path.toFile().isDirectory())
-                .forEach(personFolder -> {
-                    String personName = personFolder.getFileName().toString();
-                    try {
-                        String hash = computeFolderHash(personFolder);
-                        personHashes.put(personName, hash);
-                    } catch (IOException e) {
-                        log.warn("Failed to compute hash for folder {}", personFolder, e);
-                    }
-                });
-        }
-
-        // Save metadata with retry logic
-        saveTrainingMetadataWithRetry(personHashes);
-
-        return faceRecognizer;
     }
 
     /**
      * Save trained dataset to database with retry logic for lock contention
      */
-    private void saveTrainedDatasetWithRetry(byte[] xmlBytes) {
+    private void saveTrainedDatasetWithRetry(byte[] datasetBytes) {
         int maxRetries = 5;
         int retryDelayMs = 200;
 
@@ -329,16 +272,16 @@ public class FaceRecognitionService {
             try {
                 trainedDatasetRepository.deleteAll();
                 TrainedDataset trained = new TrainedDataset();
-                trained.setModelXml(xmlBytes);
+                trained.setModelXml(datasetBytes);
                 trainedDatasetRepository.save(trained);
                 log.debug("Successfully saved trained dataset to database on attempt {}", attempt);
-                return; // Success
+                return;
             } catch (org.springframework.dao.CannotAcquireLockException |
                      org.springframework.dao.TransientDataAccessResourceException e) {
                 if (attempt < maxRetries) {
                     long delay = retryDelayMs * (long) Math.pow(2, attempt - 1);
                     log.warn("Database locked while saving trained dataset (attempt {}/{}). Retrying in {}ms...",
-                            attempt, maxRetries, delay);
+                        attempt, maxRetries, delay);
                     try {
                         Thread.sleep(delay);
                     } catch (InterruptedException ie) {
@@ -370,13 +313,13 @@ public class FaceRecognitionService {
                     trainingMetadataRepository.save(metadata);
                 });
                 log.debug("Successfully saved training metadata to database on attempt {}", attempt);
-                return; // Success
+                return;
             } catch (org.springframework.dao.CannotAcquireLockException |
                      org.springframework.dao.TransientDataAccessResourceException e) {
                 if (attempt < maxRetries) {
                     long delay = retryDelayMs * (long) Math.pow(2, attempt - 1);
                     log.warn("Database locked while saving training metadata (attempt {}/{}). Retrying in {}ms...",
-                            attempt, maxRetries, delay);
+                        attempt, maxRetries, delay);
                     try {
                         Thread.sleep(delay);
                     } catch (InterruptedException ie) {
@@ -396,28 +339,13 @@ public class FaceRecognitionService {
 
         log.info("Checking for training data changes in: {}", rootFolderPath);
 
-        Map<String, String> currentHashes = new HashMap<>();
-
-        // Properly close the stream to avoid resource leaks
-        try (var stream = Files.list(rootFolderPath)) {
-            stream.filter(path -> path.toFile().isDirectory())
-                .forEach(personFolder -> {
-                    String personName = personFolder.getFileName().toString();
-                    try {
-                        String hash = computeFolderHash(personFolder);
-                        currentHashes.put(personName, hash);
-                        log.debug("Computed hash for {}: {}", personName, hash.substring(0, 8) + "...");
-                    } catch (IOException e) {
-                        log.warn("Failed to compute hash for folder {}", personFolder, e);
-                    }
-                });
-        }
+        Map<String, String> currentHashes = computePersonHashes(rootFolderPath);
 
         log.info("Found {} person folders in training directory", currentHashes.size());
 
         List<TrainingMetadata> allMetadata = trainingMetadataRepository.findAll();
         Map<String, String> storedHashes = allMetadata.stream()
-                .collect(Collectors.toMap(TrainingMetadata::getPersonName, TrainingMetadata::getFolderHash, (a, b) -> b));
+            .collect(Collectors.toMap(TrainingMetadata::getPersonName, TrainingMetadata::getFolderHash, (a, b) -> b));
 
         log.info("Found {} stored person metadata records in database", storedHashes.size());
 
@@ -456,7 +384,7 @@ public class FaceRecognitionService {
         return false;
     }
 
-    public FaceRecognizer ensureTrained(Path rootFolder) throws IOException {
+    public FaceRecognitionRuntime ensureTrained(Path rootFolder) throws IOException {
         Path rootFolderPath = rootFolder;
 
         log.info("=== Starting face recognition model check ===");
@@ -475,15 +403,41 @@ public class FaceRecognitionService {
             log.warn("=== RETRAINING TRIGGERED ===");
             log.info("Reason: {}", !datasetExists ? "No existing model" : "Training data changed");
             log.info("Starting model training process...");
-            FaceRecognizer recognizer = train(rootFolderPath);
+            FaceRecognitionRuntime recognizer = train(rootFolderPath);
             log.info("=== TRAINING COMPLETED SUCCESSFULLY ===");
             return recognizer;
-        } else {
+        }
+
+        try {
             log.info("Training data unchanged; loading existing model from DB");
-            FaceRecognizer recognizer = load();
+            FaceRecognitionRuntime recognizer = load();
             log.info("=== MODEL LOADED FROM DATABASE ===");
             return recognizer;
+        } catch (IllegalStateException e) {
+            log.warn("Stored face-recognition dataset is incompatible or unreadable. Retraining from filesystem.", e);
+            FaceRecognitionRuntime recognizer = train(rootFolderPath);
+            log.info("=== TRAINING COMPLETED SUCCESSFULLY ===");
+            return recognizer;
         }
+    }
+
+    private Map<String, String> computePersonHashes(Path rootFolderPath) throws IOException {
+        Map<String, String> personHashes = new HashMap<>();
+
+        try (var stream = Files.list(rootFolderPath)) {
+            stream.filter(Files::isDirectory)
+                .forEach(personFolder -> {
+                    String personName = personFolder.getFileName().toString();
+                    try {
+                        String hash = computeFolderHash(personFolder);
+                        personHashes.put(personName, hash);
+                    } catch (IOException e) {
+                        log.warn("Failed to compute hash for folder {}", personFolder, e);
+                    }
+                });
+        }
+
+        return personHashes;
     }
 
     private String computeFolderHash(Path folder) throws IOException {
@@ -498,7 +452,6 @@ public class FaceRecognitionService {
 
         long[] fileCount = {0};
 
-        // Properly close the stream to avoid resource leaks
         try (var stream = Files.walk(folder)) {
             stream.filter(Files::isRegularFile)
                 .sorted()
@@ -525,41 +478,162 @@ public class FaceRecognitionService {
     }
 
     /**
-     * Calculate adaptive distance threshold based on face size ratio to frame area.
-     * This makes the recognition resolution-independent and adjusts for distance to camera.
-     *
-     * Logic:
-     * - Larger faces (closer to camera) = stricter threshold (better quality expected)
-     * - Smaller faces (farther from camera) = more lenient threshold (account for lower quality)
-     *
-     * @param faceRatio Ratio of face area to frame area (0.0 to 1.0)
-     * @return Adaptive distance threshold for recognition
+     * Calculate adaptive threshold based on face size ratio to frame area.
      */
     private double calculateAdaptiveThreshold(double faceRatio) {
         if (faceRatio >= EXPECTED_FACE_RATIO) {
-            // Face is larger than expected (person is closer to camera)
-            // Use stricter threshold - high quality image should match better
-            // Example: face is 10% of frame (2x expected) → threshold = 30
-            //          face is 7.5% of frame (1.5x expected) → threshold = 40
             double threshold = BASE_DISTANCE * (EXPECTED_FACE_RATIO / faceRatio);
             return Math.max(threshold, MIN_ADAPTIVE_THRESHOLD);
-        } else {
-            // Face is smaller than expected (person is farther from camera)
-            // Use more lenient threshold - lower quality may affect matching
-            // Example: face is 2.5% of frame (0.5x expected) → threshold = 75
-            //          face is 1.25% of frame (0.25x expected) → threshold = 85
-            double factor = Math.sqrt(EXPECTED_FACE_RATIO / faceRatio);
-            double threshold = BASE_DISTANCE * factor;
-            return Math.min(threshold, MAX_ADAPTIVE_THRESHOLD);
+        }
+
+        double factor = Math.sqrt(EXPECTED_FACE_RATIO / faceRatio);
+        double threshold = BASE_DISTANCE * factor;
+        return Math.min(threshold, MAX_ADAPTIVE_THRESHOLD);
+    }
+
+    private MatchResult matchAgainstGallery(FaceRecognitionRuntime runtime, Mat probeFeature) {
+        String bestPerson = UNKNOWN;
+        double bestSimilarity = Double.NEGATIVE_INFINITY;
+
+        synchronized (runtime.getRecognizer()) {
+            for (Map.Entry<String, List<Mat>> entry : runtime.getGalleryFeatures().entrySet()) {
+                for (Mat candidateFeature : entry.getValue()) {
+                    double similarity = runtime.getRecognizer().match(probeFeature, candidateFeature, FaceRecognizerSF.FR_COSINE);
+                    if (Double.isNaN(similarity)) {
+                        continue;
+                    }
+
+                    if (similarity > bestSimilarity) {
+                        bestSimilarity = similarity;
+                        bestPerson = entry.getKey();
+                    }
+                }
+            }
+        }
+
+        if (bestSimilarity == Double.NEGATIVE_INFINITY) {
+            return new MatchResult(UNKNOWN, 1.0);
+        }
+
+        return new MatchResult(bestPerson, 1.0 - clampSimilarity(bestSimilarity));
+    }
+
+    private Mat createFaceBoxMat(DeepLearningFaceDetectionService.FaceDetection detection) {
+        Mat faceBox = new Mat(1, 15, CV_32FC1);
+        FloatIndexer indexer = faceBox.createIndexer();
+
+        try {
+            indexer.put(0, 0, detection.rect().x());
+            indexer.put(0, 1, detection.rect().y());
+            indexer.put(0, 2, detection.rect().width());
+            indexer.put(0, 3, detection.rect().height());
+
+            for (int landmarkIndex = 0; landmarkIndex < detection.landmarks().length; landmarkIndex++) {
+                indexer.put(0, 4 + landmarkIndex, detection.landmarks()[landmarkIndex]);
+            }
+
+            indexer.put(0, 14, detection.confidence());
+            return faceBox;
+        } finally {
+            indexer.release();
         }
     }
 
-    private String sanitizeLabel(String label) {
-        if (label == null) {
-            return UNKNOWN;
+    private float[] extractFeatureVector(Mat feature) {
+        FloatIndexer indexer = feature.createIndexer();
+        try {
+            int featureLength = (int) feature.total();
+            float[] values = new float[featureLength];
+            for (int index = 0; index < featureLength; index++) {
+                values[index] = feature.dims() > 1 ? indexer.get(0, index) : indexer.get(index);
+            }
+            return values;
+        } finally {
+            indexer.release();
+        }
+    }
+
+    private Map<String, List<Mat>> buildRuntimeGallery(Map<String, List<float[]>> storedEmbeddings) {
+        if (storedEmbeddings == null || storedEmbeddings.isEmpty()) {
+            throw new IllegalStateException("Stored face gallery is empty");
         }
 
-        String sanitized = label.replace("\u0000", "").trim();
-        return sanitized.isEmpty() ? UNKNOWN : sanitized;
+        Map<String, List<Mat>> gallery = new HashMap<>();
+        storedEmbeddings.forEach((personName, embeddings) -> {
+            List<Mat> personFeatures = new ArrayList<>();
+            for (float[] embedding : embeddings) {
+                personFeatures.add(createFeatureMat(embedding));
+            }
+            gallery.put(personName, personFeatures);
+        });
+        return gallery;
+    }
+
+    private Mat createFeatureMat(float[] embedding) {
+        if (embedding == null || embedding.length == 0) {
+            throw new IllegalStateException("Encountered empty face embedding in stored gallery");
+        }
+
+        Mat feature = new Mat(1, embedding.length, CV_32FC1);
+        FloatIndexer indexer = feature.createIndexer();
+        try {
+            for (int index = 0; index < embedding.length; index++) {
+                indexer.put(0, index, embedding[index]);
+            }
+            return feature;
+        } finally {
+            indexer.release();
+        }
+    }
+
+    private byte[] serializeGallery(Map<String, List<float[]>> gallery) {
+        try {
+            return OBJECT_MAPPER.writeValueAsBytes(new StoredGallery(gallery));
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to serialize face gallery", e);
+        }
+    }
+
+    private StoredGallery deserializeGallery(byte[] rawBytes) {
+        try {
+            StoredGallery gallery = OBJECT_MAPPER.readValue(rawBytes, GALLERY_TYPE);
+            if (gallery == null || gallery.embeddings() == null || gallery.embeddings().isEmpty()) {
+                throw new IllegalStateException("Stored face gallery is empty");
+            }
+            return gallery;
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to deserialize stored face gallery", e);
+        }
+    }
+
+    private FaceRecognizerSF createRecognizer() {
+        try {
+            String modelPath = OpenCvResourceHelper.getResourcePath(SFACE_MODEL_FILE, FaceRecognitionService.class);
+            return FaceRecognizerSF.create(modelPath, "");
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialize FaceRecognizerSF", e);
+        }
+    }
+
+    private void releaseRuntimeGallery(Map<String, List<Mat>> runtimeGallery) {
+        runtimeGallery.values().forEach(this::releaseGalleryFeatures);
+    }
+
+    private void releaseGalleryFeatures(List<Mat> features) {
+        features.forEach(feature -> {
+            if (feature != null) {
+                feature.release();
+            }
+        });
+    }
+
+    private double clampSimilarity(double similarity) {
+        return Math.max(0.0, Math.min(1.0, similarity));
+    }
+
+    private record MatchResult(String personName, double distance) {
+    }
+
+    private record StoredGallery(Map<String, List<float[]>> embeddings) {
     }
 }
