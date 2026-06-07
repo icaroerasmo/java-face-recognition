@@ -24,6 +24,7 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -158,6 +159,7 @@ public class RtspRecognitionRunner {
                 rtspFrameExtractorService.extract(rtspUrl, cameraProperties.getProtocol(), (img) -> {
 
                     FaceRecognition faceRecognition = null;
+                    List<Rect> detectedPeople = List.of();
 
                     try {
 
@@ -166,7 +168,7 @@ public class RtspRecognitionRunner {
                         }
 
                         // STEP 1: First detect if there are any people in the frame
-                        List<Rect> detectedPeople = personDetector.detect(img);
+                        detectedPeople = personDetector.detect(img);
 
                         if (detectedPeople.isEmpty()) {
                             // No people detected at all - skip this frame
@@ -337,16 +339,13 @@ public class RtspRecognitionRunner {
                     } catch (Exception e) {
                         log.error("Error processing frame from camera '{}': {}", cameraName, e.getMessage(), e);
                     } finally {
-                    try {
-                        Mat detectionImg = null;
-                        if (faceRecognition != null) {
-                            detectionImg = faceRecognition.getDetectionImg();
+                        try {
+                            releaseRects(detectedPeople);
+                            releaseFaceRecognitionRects(faceRecognition);
+                        } catch (Exception releaseEx) {
+                            log.warn("Error releasing native rectangles for camera '{}'", cameraName, releaseEx);
                         }
-                        matUtil.releaseResources(img, detectionImg);
-                    } catch (Exception releaseEx) {
-                        log.warn("Error releasing resources for camera '{}'", cameraName, releaseEx);
                     }
-                }
                 });
 
                 // If extract() returns normally, connection was lost
@@ -549,5 +548,34 @@ public class RtspRecognitionRunner {
                 "2. Docker path: /app/train\n" +
                 "3. Classpath resource: " + trainingRootFolder + "\n" +
                 "Please ensure your training dataset is available in one of these locations.");
+    }
+
+    private void releaseFaceRecognitionRects(FaceRecognition faceRecognition) {
+        if (faceRecognition == null || faceRecognition.getFaces() == null) {
+            return;
+        }
+
+        Map<Rect, Boolean> releasedRects = new IdentityHashMap<>();
+        for (FaceRecognition.DetectedFaces face : faceRecognition.getFaces()) {
+            if (face == null || face.getFaceRect() == null) {
+                continue;
+            }
+            if (releasedRects.put(face.getFaceRect(), Boolean.TRUE) == null) {
+                face.getFaceRect().deallocate();
+            }
+        }
+    }
+
+    private void releaseRects(List<Rect> rects) {
+        if (rects == null || rects.isEmpty()) {
+            return;
+        }
+
+        Map<Rect, Boolean> releasedRects = new IdentityHashMap<>();
+        for (Rect rect : rects) {
+            if (rect != null && releasedRects.put(rect, Boolean.TRUE) == null) {
+                rect.deallocate();
+            }
+        }
     }
 }

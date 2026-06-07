@@ -93,7 +93,11 @@ public class DeepLearningFaceDetectionService {
         MatVector outputs = null;
         StringVector outputNames = null;
         Size inputSize = null;
+        Size resizedSize = null;
         Scalar meanValues = null;
+        Scalar paddingColor = null;
+        Rect roiRect = null;
+        Mat roi = null;
 
         try {
             // Store original dimensions
@@ -109,7 +113,8 @@ public class DeepLearningFaceDetectionService {
 
             resizedImage = new Mat();
             inputSize = new Size(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
-            resize(testImage, resizedImage, new Size(resizedWidth, resizedHeight));
+            resizedSize = new Size(resizedWidth, resizedHeight);
+            resize(testImage, resizedImage, resizedSize);
 
             // Validate resized image
             if (resizedImage.empty()) {
@@ -117,10 +122,11 @@ public class DeepLearningFaceDetectionService {
                 return faces;
             }
 
-            paddedImage = new Mat(inputSize, testImage.type(), new Scalar(0, 0, 0, 0));
-            Mat roi = new Mat(paddedImage, new Rect(0, 0, resizedWidth, resizedHeight));
+            paddingColor = new Scalar(0, 0, 0, 0);
+            paddedImage = new Mat(inputSize, testImage.type(), paddingColor);
+            roiRect = new Rect(0, 0, resizedWidth, resizedHeight);
+            roi = new Mat(paddedImage, roiRect);
             resizedImage.copyTo(roi);
-            roi.deallocate();
 
             // Create blob from resized image
             // NCHW: Number of images, Channels, Height, Width
@@ -163,11 +169,23 @@ public class DeepLearningFaceDetectionService {
             if (inputSize != null) {
                 inputSize.deallocate();
             }
+            if (resizedSize != null) {
+                resizedSize.deallocate();
+            }
             if (outputNames != null) {
                 outputNames.deallocate();
             }
             if (outputs != null) {
                 outputs.deallocate();
+            }
+            if (paddingColor != null) {
+                paddingColor.deallocate();
+            }
+            if (roi != null) {
+                roi.deallocate();
+            }
+            if (roiRect != null) {
+                roiRect.deallocate();
             }
             // Release all resources in reverse order of creation
             matUtil.releaseResources(blob, paddedImage, resizedImage);
@@ -327,17 +345,25 @@ public class DeepLearningFaceDetectionService {
         List<FaceDetection> selected = new ArrayList<>();
         boolean[] suppressed = new boolean[detections.size()];
 
-        for (int i = 0; i < detections.size() && selected.size() < MAX_DETECTIONS; i++) {
-            if (suppressed[i]) {
-                continue;
+        try {
+            for (int i = 0; i < detections.size() && selected.size() < MAX_DETECTIONS; i++) {
+                if (suppressed[i]) {
+                    continue;
+                }
+
+                Detection current = detections.get(i);
+                selected.add(new FaceDetection(cloneRect(current.rect()), current.confidence(), current.landmarks()));
+
+                for (int j = i + 1; j < detections.size(); j++) {
+                    if (!suppressed[j] && intersectionOverUnion(current.rect(), detections.get(j).rect()) > NMS_THRESHOLD) {
+                        suppressed[j] = true;
+                    }
+                }
             }
-
-            Detection current = detections.get(i);
-            selected.add(new FaceDetection(current.rect(), current.confidence(), current.landmarks()));
-
-            for (int j = i + 1; j < detections.size(); j++) {
-                if (!suppressed[j] && intersectionOverUnion(current.rect(), detections.get(j).rect()) > NMS_THRESHOLD) {
-                    suppressed[j] = true;
+        } finally {
+            for (Detection detection : detections) {
+                if (detection.rect() != null) {
+                    detection.rect().deallocate();
                 }
             }
         }
@@ -374,6 +400,13 @@ public class DeepLearningFaceDetectionService {
 
     private float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(value, max));
+    }
+
+    private Rect cloneRect(Rect rect) {
+        if (rect == null) {
+            return null;
+        }
+        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
     }
 
     public record FaceDetection(Rect rect, float confidence, float[] landmarks) {}
