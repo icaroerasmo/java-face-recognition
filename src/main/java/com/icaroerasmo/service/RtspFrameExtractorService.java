@@ -1,4 +1,4 @@
-package com.icaroerasmo.detectors.person.services;
+package com.icaroerasmo.service;
 
 import com.icaroerasmo.properties.CameraProperties;
 import com.icaroerasmo.properties.StreamsProperties;

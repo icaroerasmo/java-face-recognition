@@ -10,7 +10,7 @@ import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
 import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
 import com.icaroerasmo.detectors.person.services.PeopleTrackingService;
 import com.icaroerasmo.service.TelegramPublisherService;
-import com.icaroerasmo.detectors.person.services.RtspFrameExtractorService;
+import com.icaroerasmo.service.RtspFrameExtractorService;
 import com.icaroerasmo.detectors.person.PersonDetector;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +24,6 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -340,8 +339,12 @@ public class RtspRecognitionRunner {
                         log.error("Error processing frame from camera '{}': {}", cameraName, e.getMessage(), e);
                     } finally {
                         try {
-                            releaseRects(detectedPeople);
-                            releaseFaceRecognitionRects(faceRecognition);
+                            matUtil.deallocateRects(detectedPeople);
+                            if (faceRecognition != null && faceRecognition.getFaces() != null) {
+                                matUtil.deallocateRects(faceRecognition.getFaces().stream()
+                                    .map(FaceRecognition.DetectedFaces::getFaceRect)
+                                    .toList());
+                            }
                         } catch (Exception releaseEx) {
                             log.warn("Error releasing native rectangles for camera '{}'", cameraName, releaseEx);
                         }
@@ -550,32 +553,4 @@ public class RtspRecognitionRunner {
                 "Please ensure your training dataset is available in one of these locations.");
     }
 
-    private void releaseFaceRecognitionRects(FaceRecognition faceRecognition) {
-        if (faceRecognition == null || faceRecognition.getFaces() == null) {
-            return;
-        }
-
-        Map<Rect, Boolean> releasedRects = new IdentityHashMap<>();
-        for (FaceRecognition.DetectedFaces face : faceRecognition.getFaces()) {
-            if (face == null || face.getFaceRect() == null) {
-                continue;
-            }
-            if (releasedRects.put(face.getFaceRect(), Boolean.TRUE) == null) {
-                face.getFaceRect().deallocate();
-            }
-        }
-    }
-
-    private void releaseRects(List<Rect> rects) {
-        if (rects == null || rects.isEmpty()) {
-            return;
-        }
-
-        Map<Rect, Boolean> releasedRects = new IdentityHashMap<>();
-        for (Rect rect : rects) {
-            if (rect != null && releasedRects.put(rect, Boolean.TRUE) == null) {
-                rect.deallocate();
-            }
-        }
-    }
 }

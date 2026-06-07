@@ -140,7 +140,7 @@ public class FaceRecognitionService {
                     String.format("%.4f", faceRatio * 100));
             }
 
-            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, cloneRect(faceDetection.rect()));
+            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, matUtil.cloneRect(faceDetection.rect()));
         } catch (Exception e) {
             log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
                 faceDetection.rect().x(), faceDetection.rect().y(), faceDetection.rect().width(), faceDetection.rect().height(), e);
@@ -633,13 +633,6 @@ public class FaceRecognitionService {
 
     private double clampSimilarity(double similarity) {
         return Math.max(0.0, Math.min(1.0, similarity));
-    }
-
-    private Rect cloneRect(Rect rect) {
-        if (rect == null) {
-            return null;
-        }
-        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
     }
 
     private record MatchResult(String personName, double distance) {
