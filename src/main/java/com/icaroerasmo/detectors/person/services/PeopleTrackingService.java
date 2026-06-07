@@ -1,6 +1,8 @@
-package com.icaroerasmo.service;
+package com.icaroerasmo.detectors.person.services;
 
 import com.icaroerasmo.properties.StreamsProperties;
+import com.icaroerasmo.service.GifCreationService;
+import com.icaroerasmo.service.TelegramPublisherService;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.AllArgsConstructor;
 import lombok.Data;

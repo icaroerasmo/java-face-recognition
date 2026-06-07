@@ -1,7 +1,8 @@
-package com.icaroerasmo.service;
+package com.icaroerasmo.detectors.person.services;
 
 import com.icaroerasmo.properties.AccelerationProperties;
 import com.icaroerasmo.properties.FaceRecognitionProperties;
+import com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper;
 import com.icaroerasmo.utils.MatUtil;
 import com.icaroerasmo.utils.OpenCvResourceHelper;
 import lombok.extern.log4j.Log4j2;
@@ -11,9 +12,6 @@ import org.bytedeco.opencv.opencv_core.*;
 import org.bytedeco.opencv.opencv_dnn.*;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Comparator;
@@ -46,15 +44,15 @@ public class DeepLearningFaceDetectionService {
     private final Net net;
 
     private final MatUtil matUtil;
-    private final DnnInferenceCoordinator dnnInferenceCoordinator;
+    private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
 
     public DeepLearningFaceDetectionService(
             MatUtil matUtil,
             FaceRecognitionProperties faceRecognitionProperties,
-            DnnInferenceCoordinator dnnInferenceCoordinator
+            DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper
     ) {
         this.matUtil = matUtil;
-        this.dnnInferenceCoordinator = dnnInferenceCoordinator;
+        this.dnnInferenceCoordinatorHelper = dnnInferenceCoordinatorHelper;
         try {
             String modelPath = OpenCvResourceHelper.getResourcePath(SCRFD_MODEL_FILE, DeepLearningFaceDetectionService.class);
 
@@ -137,7 +135,7 @@ public class DeepLearningFaceDetectionService {
             Mat inferenceBlob = blob;
             outputNames = net.getUnconnectedOutLayersNames();
             StringVector finalOutputNames = outputNames;
-            outputs = dnnInferenceCoordinator.runExclusive("face detection", () -> {
+            outputs = dnnInferenceCoordinatorHelper.runExclusive("face detection", () -> {
                 // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
                 net.setInput(inferenceBlob);
                 MatVector out = new MatVector(finalOutputNames.size());

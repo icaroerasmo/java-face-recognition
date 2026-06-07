@@ -1,4 +1,4 @@
-package com.icaroerasmo.service;
+package com.icaroerasmo.detectors.person.services;
 
 import com.icaroerasmo.model.FaceRecognition;
 import com.icaroerasmo.utils.MatUtil;
@@ -17,7 +17,6 @@ import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.bytedeco.opencv.opencv_face.LBPHFaceRecognizer;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.IntBuffer;
 import java.nio.file.Files;
