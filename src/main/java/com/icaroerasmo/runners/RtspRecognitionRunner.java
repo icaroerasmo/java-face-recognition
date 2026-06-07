@@ -7,6 +7,7 @@ import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.detectors.person.services.FaceRecognitionService;
 import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
+import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
 import com.icaroerasmo.detectors.person.services.PeopleTrackingService;
 import com.icaroerasmo.service.TelegramPublisherService;
 import com.icaroerasmo.detectors.person.services.RtspFrameExtractorService;
@@ -16,7 +17,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.bytedeco.opencv.opencv_core.Rect;
-import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.jetbrains.annotations.NotNull;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
@@ -54,7 +54,7 @@ public class RtspRecognitionRunner {
 
         try {
             File trainingRootDir = getTrainedFile();
-            FaceRecognizer faceRecognizer = faceRecognitionService.ensureTrained(trainingRootDir.toPath());
+            FaceRecognitionRuntime faceRecognizer = faceRecognitionService.ensureTrained(trainingRootDir.toPath());
 
             // Initialize the holder with the trained recognizer
             faceRecognizerHolderService.updateRecognizer(faceRecognizer);
@@ -99,7 +99,7 @@ public class RtspRecognitionRunner {
 
     private FaceRecognition getFaceRecognition(Mat img) {
         // Get the current recognizer from the holder (thread-safe)
-        FaceRecognizer currentRecognizer = faceRecognizerHolderService.get();
+        FaceRecognitionRuntime currentRecognizer = faceRecognizerHolderService.get();
 
         if (currentRecognizer == null) {
             log.warn("FaceRecognizer not initialized yet, skipping frame");
