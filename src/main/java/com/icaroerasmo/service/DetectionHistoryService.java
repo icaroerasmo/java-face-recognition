@@ -7,6 +7,8 @@ import java.security.MessageDigest;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.icaroerasmo.utils.FaceHashUtils.computeSimilarity;
+
 /**
  * Service to track and manage detection history to avoid sending duplicate frames.
  * Uses detectedPeopleKey per camera to identify duplicate person detections.
@@ -55,7 +57,7 @@ public class DetectionHistoryService {
         if (timeSinceLastDetection < DETECTION_COOLDOWN_MS) {
             // Check face similarity if available
             if (lastDetection.faceHash != null && faceHash != null) {
-                int similarity = computeFaceHashSimilarity(faceHash, lastDetection.faceHash);
+                int similarity = computeSimilarity(faceHash, lastDetection.faceHash);
                 if (similarity <= SIMILARITY_THRESHOLD) {
                     log.debug("Duplicate unknown person filtered for {}:{} ({}ms since last, similarity: {})",
                             cameraName, detectedPeopleKey, timeSinceLastDetection, similarity);
@@ -132,32 +134,6 @@ public class DetectionHistoryService {
         log.debug("Marked unknown detection as sent for {}: {}", cameraName, detectedPeopleKey);
     }
 
-
-    /**
-     * Compute similarity between two face hashes using byte array comparison
-     * Returns a score from 0 (identical) to 100 (completely different)
-     */
-    private int computeFaceHashSimilarity(byte[] hash1, byte[] hash2) {
-        if (hash1 == null || hash2 == null) {
-            return 100;
-        }
-
-        if (Math.abs(hash1.length - hash2.length) > hash1.length * 0.1) {
-            return 100;
-        }
-
-        int minLength = Math.min(hash1.length, hash2.length);
-        int differentBytes = 0;
-
-        for (int i = 0; i < minLength; i++) {
-            if (hash1[i] != hash2[i]) {
-                differentBytes++;
-            }
-        }
-
-        differentBytes += Math.abs(hash1.length - hash2.length);
-        return Math.min(100, (differentBytes * 100) / Math.max(hash1.length, hash2.length));
-    }
 
     /**
      * Computes SHA-256 hash of image bytes

@@ -31,6 +31,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
+import static com.icaroerasmo.utils.Constants.DESIRED_SCORE;
+
 
 @Log4j2
 @Component
@@ -238,7 +240,7 @@ public class RtspRecognitionRunner {
                                             "Unknown",
                                             personRect,
                                             personHash,
-                                            100.0, // High distance that it's unknown
+                                            DESIRED_SCORE, // High distance that it's unknown
                                             fullFrameBytes,
                                             allPeopleDetections, // Pass ALL detected people with names for drawing
                                             false
@@ -262,13 +264,13 @@ public class RtspRecognitionRunner {
                         return; // Don't continue processing if no faces detected
                     }
 
-                    // Filter out faces with score > 100
+                    // Filter out faces with score > DESIRED_SCORE
                     faces = faces.stream()
-                            .filter(face -> face.getDistance() <= 100)
+                            .filter(face -> face.getDistance() <= DESIRED_SCORE)
                             .collect(Collectors.toList());
 
                     if (faces.isEmpty()) {
-                        log.debug("All detected faces in frame from camera '{}' have score > 100, skipping frame", cameraName);
+                        log.debug("All detected faces in frame from camera '{}' have score > {}, skipping frame", cameraName, DESIRED_SCORE);
                         return;
                     }
 

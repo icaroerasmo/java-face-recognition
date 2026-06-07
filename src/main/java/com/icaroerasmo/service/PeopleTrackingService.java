@@ -18,6 +18,8 @@ import java.util.Objects;
 import java.util.concurrent.*;
 import jakarta.annotation.PreDestroy;
 
+import static com.icaroerasmo.utils.FaceHashUtils.computeSimilarity;
+
 /**
  * Service to track people (both known and unknown) across multiple frames.
  * This helps prevent duplicate notifications for the same person and ensures
@@ -518,7 +520,7 @@ public class PeopleTrackingService {
             }
 
             // Check face hash similarity
-            int similarity = computeFaceHashSimilarity(faceHash, track.getLatestFaceHash());
+            int similarity = computeSimilarity(faceHash, track.getLatestFaceHash());
             log.debug("📊 Track at ({}, {}) similarity: {} (threshold: {}), distance: {}px, age: {}ms",
                 lastRect.x(), lastRect.y(), similarity, adaptiveSimilarityThreshold,
                 (int)distance, timeSinceLastSeen);
@@ -596,31 +598,6 @@ public class PeopleTrackingService {
         double dx = centerX1 - centerX2;
         double dy = centerY1 - centerY2;
         return Math.sqrt(dx * dx + dy * dy);
-    }
-
-    /**
-     * Compute similarity between two face hashes
-     */
-    private int computeFaceHashSimilarity(byte[] hash1, byte[] hash2) {
-        if (hash1 == null || hash2 == null) {
-            return 100;
-        }
-
-        if (Math.abs(hash1.length - hash2.length) > hash1.length * 0.1) {
-            return 100;
-        }
-
-        int minLength = Math.min(hash1.length, hash2.length);
-        int differentBytes = 0;
-
-        for (int i = 0; i < minLength; i++) {
-            if (hash1[i] != hash2[i]) {
-                differentBytes++;
-            }
-        }
-
-        differentBytes += Math.abs(hash1.length - hash2.length);
-        return Math.min(100, (differentBytes * 100) / Math.max(hash1.length, hash2.length));
     }
 
     /**
