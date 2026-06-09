@@ -5,6 +5,7 @@ import org.springframework.stereotype.Component;
 
 import java.awt.image.DataBufferByte;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 
 import static org.bytedeco.opencv.global.opencv_imgproc.*;
 import static org.bytedeco.opencv.global.opencv_imgproc.LINE_8;
@@ -14,7 +15,31 @@ import static org.bytedeco.opencv.global.opencv_imgproc.rectangle;
 @Component
 public class MatUtil {
     public void releaseResources(Mat... matArr) {
+        deallocateMats(matArr);
+    }
+
+    public static void deallocateMats(Mat... matArr) {
         Arrays.asList(matArr).stream().filter(mat -> mat != null).forEach(Mat::release);
+    }
+
+    public static Rect cloneRect(Rect rect) {
+        if (rect == null) {
+            return null;
+        }
+        return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
+    }
+
+    public static void deallocateRects(Iterable<Rect> rects) {
+        if (rects == null) {
+            return;
+        }
+
+        IdentityHashMap<Rect, Boolean> deallocatedRects = new IdentityHashMap<>();
+        for (Rect rect : rects) {
+            if (rect != null && deallocatedRects.put(rect, Boolean.TRUE) == null) {
+                rect.deallocate();
+            }
+        }
     }
 
     public Mat convertToGray(Mat testImage) {
@@ -42,10 +67,16 @@ public class MatUtil {
         int textY = rect.y() + rect.height() + textOffset;
         int fontFace = FONT_HERSHEY_SIMPLEX;
         Scalar color = new Scalar(76, 175, 80, 1);
+        Point textPoint = new Point(textX, textY);
         int lineType = LINE_8;
 
-        rectangle(img, rect, color, thickness, lineType, 0);
-        putText(img, text, new Point(textX, textY), fontFace, fontScale, color, thickness, lineType, false);
+        try {
+            rectangle(img, rect, color, thickness, lineType, 0);
+            putText(img, text, textPoint, fontFace, fontScale, color, thickness, lineType, false);
+        } finally {
+            textPoint.deallocate();
+            color.deallocate();
+        }
     }
 
     public void clearMatVector(MatVector images) {

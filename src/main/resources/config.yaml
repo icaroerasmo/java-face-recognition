@@ -9,7 +9,6 @@ face-recognition:
       # - name: "front-door"
       #   url: "rtsp://another-camera/stream"
   training:
-    dataset-path: "trained_dataset.xml"
     root-folder: "train"
   acceleration:
     backend: OPENCV
