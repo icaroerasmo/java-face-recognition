@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "face-recognition")
 public class FaceRecognitionProperties {
 
+    private Boolean enabled = true;
+
     @NestedConfigurationProperty
     private StreamsProperties streams = new StreamsProperties();
 

@@ -2,7 +2,6 @@ package com.icaroerasmo.service;
 
 import com.icaroerasmo.properties.CameraProperties;
 import com.icaroerasmo.properties.StreamsProperties;
-import com.icaroerasmo.utils.Constants;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.log4j.Log4j2;
