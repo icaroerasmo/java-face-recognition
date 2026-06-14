@@ -19,7 +19,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class GifCreationService {
 
-    private final MatUtil matUtil;
     private final FaceRecognitionProperties faceRecognitionProperties;
 
     // GIF parameters
@@ -153,7 +152,7 @@ public class GifCreationService {
                         org.bytedeco.opencv.global.opencv_imgproc.resize(frameMat, resizedFrame, resizedSize);
 
                         // Convert to BufferedImage
-                        java.awt.image.BufferedImage bufferedImage = matUtil.matToBufferedImage(resizedFrame);
+                        java.awt.image.BufferedImage bufferedImage = MatUtil.matToBufferedImage(resizedFrame);
 
                         if (bufferedImage != null) {
                             // Convert to Frame and record
@@ -174,7 +173,7 @@ public class GifCreationService {
                         if (resizedSize != null) {
                             resizedSize.deallocate();
                         }
-                        matUtil.releaseResources(frameMat, resizedFrame);
+                        MatUtil.releaseResources(frameMat, resizedFrame);
                     }
                 }
 
@@ -199,7 +198,7 @@ public class GifCreationService {
                 if (encodedFirstFrame != null) {
                     encodedFirstFrame.deallocate();
                 }
-                matUtil.releaseResources(firstFrame);
+                MatUtil.releaseResources(firstFrame);
             }
 
         } catch (Exception e) {

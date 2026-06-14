@@ -43,15 +43,12 @@ public class PersonDetector implements IDetector {
     // Mean values: 127.5 for each channel (created per use to avoid memory leak)
 
     private final Net net;
-    private final MatUtil matUtil;
     private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
 
     public PersonDetector(
-            MatUtil matUtil,
             FaceRecognitionProperties faceRecognitionProperties,
             DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper
     ) {
-        this.matUtil = matUtil;
         this.dnnInferenceCoordinatorHelper = dnnInferenceCoordinatorHelper;
         try {
             String protoPath = OpenCvResourceHelper.getResourcePath(PROTO_FILE, PersonDetector.class);
@@ -219,7 +216,7 @@ public class PersonDetector implements IDetector {
                 }
             }
             // Release Mat resources
-            matUtil.releaseResources(resizedImage, blob, output, detectionMat);
+            MatUtil.releaseResources(resizedImage, blob, output, detectionMat);
         }
 
         return people;
