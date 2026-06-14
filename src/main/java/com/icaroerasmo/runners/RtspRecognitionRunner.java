@@ -42,7 +42,6 @@ public class RtspRecognitionRunner {
     private final FaceRecognitionService faceRecognitionService;
     private final FaceRecognizerHolderService faceRecognizerHolderService;
     private final RtspFrameExtractorService rtspFrameExtractorService;
-    private final MatUtil matUtil;
     private final TelegramPublisherService telegramPublisherService;
     private final PeopleTrackingService peopleTrackingService;
     private final PersonDetector personDetector;
@@ -267,7 +266,7 @@ public class RtspRecognitionRunner {
                                         // Clean up resources
                                         if (faceBuf != null) faceBuf.deallocate();
                                         if (jpgExtFace != null) jpgExtFace.deallocate();
-                                        if (faceRegion != null) matUtil.releaseResources(faceRegion);
+                                        if (faceRegion != null) MatUtil.releaseResources(faceRegion);
                                     }
                                 }
 
@@ -334,9 +333,9 @@ public class RtspRecognitionRunner {
                         log.error("Error processing frame from camera '{}': {}", cameraName, e.getMessage(), e);
                     } finally {
                         try {
-                            matUtil.deallocateRects(detectedPeople);
+                            MatUtil.deallocateRects(detectedPeople);
                             if (faceRecognition != null && faceRecognition.getFaces() != null) {
-                                matUtil.deallocateRects(faceRecognition.getFaces().stream()
+                                MatUtil.deallocateRects(faceRecognition.getFaces().stream()
                                     .map(FaceRecognition.DetectedFaces::getFaceRect)
                                     .toList());
                             }
@@ -474,7 +473,7 @@ public class RtspRecognitionRunner {
                     } finally {
                         if (personBuf != null) personBuf.deallocate();
                         if (jpgExtPerson != null) jpgExtPerson.deallocate();
-                        if (personRegion != null) matUtil.releaseResources(personRegion);
+                        if (personRegion != null) MatUtil.releaseResources(personRegion);
                     }
 
                     // Track this person, passing ALL people detections for drawing
