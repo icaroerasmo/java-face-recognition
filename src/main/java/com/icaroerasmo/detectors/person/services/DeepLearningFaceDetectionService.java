@@ -43,15 +43,12 @@ public class DeepLearningFaceDetectionService {
     private static final int SCRFD_ANCHORS_PER_LOCATION = 2;
     private final Net net;
 
-    private final MatUtil matUtil;
     private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
 
     public DeepLearningFaceDetectionService(
-            MatUtil matUtil,
             FaceRecognitionProperties faceRecognitionProperties,
             DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper
     ) {
-        this.matUtil = matUtil;
         this.dnnInferenceCoordinatorHelper = dnnInferenceCoordinatorHelper;
         try {
             String modelPath = OpenCvResourceHelper.getResourcePath(SCRFD_MODEL_FILE, DeepLearningFaceDetectionService.class);
@@ -188,7 +185,7 @@ public class DeepLearningFaceDetectionService {
                 roiRect.deallocate();
             }
             // Release all resources in reverse order of creation
-            matUtil.releaseResources(blob, paddedImage, resizedImage);
+            MatUtil.releaseResources(blob, paddedImage, resizedImage);
         }
 
         return faces;
@@ -352,7 +349,7 @@ public class DeepLearningFaceDetectionService {
                 }
 
                 Detection current = detections.get(i);
-                selected.add(new FaceDetection(matUtil.cloneRect(current.rect()), current.confidence(), current.landmarks()));
+                selected.add(new FaceDetection(MatUtil.cloneRect(current.rect()), current.confidence(), current.landmarks()));
 
                 for (int j = i + 1; j < detections.size(); j++) {
                     if (!suppressed[j] && intersectionOverUnion(current.rect(), detections.get(j).rect()) > NMS_THRESHOLD) {

@@ -53,7 +53,6 @@ public class FaceRecognitionService {
     private static final double MAX_ADAPTIVE_THRESHOLD = 0.60;
 
     private final DeepLearningFaceDetectionService deepLearningFaceDetectionService;
-    private final MatUtil matUtil;
     private final TrainingMetadataRepository trainingMetadataRepository;
     private final TrainedDatasetRepository trainedDatasetRepository;
 
@@ -129,13 +128,13 @@ public class FaceRecognitionService {
                     String.format("%.4f", adaptiveThreshold),
                     String.format("%.4f", faceRatio * 100));
 
-            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, matUtil.cloneRect(faceDetection.rect()));
+            return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, MatUtil.cloneRect(faceDetection.rect()));
         } catch (Exception e) {
             log.error("Error processing face detection for rect: x={}, y={}, width={}, height={}",
                 faceDetection.rect().x(), faceDetection.rect().y(), faceDetection.rect().width(), faceDetection.rect().height(), e);
             return null;
         } finally {
-            matUtil.releaseResources(faceBox, alignedFace, feature);
+            MatUtil.releaseResources(faceBox, alignedFace, feature);
             if (faceDetection.rect() != null) {
                 faceDetection.rect().deallocate();
             }
@@ -214,7 +213,7 @@ public class FaceRecognitionService {
                             personRuntimeEmbeddings.add(feature.clone());
                             personStoredEmbeddings.add(extractFeatureVector(feature));
                         } finally {
-                            matUtil.releaseResources(img, faceBox, alignedFace, feature);
+                            MatUtil.releaseResources(img, faceBox, alignedFace, feature);
                         }
                     }
                 }
