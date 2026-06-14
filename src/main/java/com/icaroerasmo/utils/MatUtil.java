@@ -12,9 +12,8 @@ import static org.bytedeco.opencv.global.opencv_imgproc.LINE_8;
 import static org.bytedeco.opencv.global.opencv_imgproc.putText;
 import static org.bytedeco.opencv.global.opencv_imgproc.rectangle;
 
-@Component
 public class MatUtil {
-    public void releaseResources(Mat... matArr) {
+    public static void releaseResources(Mat... matArr) {
         deallocateMats(matArr);
     }
 
@@ -42,13 +41,7 @@ public class MatUtil {
         }
     }
 
-    public Mat convertToGray(Mat testImage) {
-        Mat target = new Mat();
-        cvtColor(testImage, target, COLOR_RGB2GRAY);
-        return target;
-    }
-
-    public void drawRectangleAndName(Mat img, String text, Rect rect) {
+    public static void drawRectangleAndName(Mat img, String text, Rect rect) {
         // Calculate proportional values based on image resolution
         int imageWidth = img.cols();
         int imageHeight = img.rows();
@@ -79,24 +72,11 @@ public class MatUtil {
         }
     }
 
-    public void clearMatVector(MatVector images) {
-        try (MatVector.Iterator iterator = images.begin()) {
-            while (!iterator.equals(images.end())) {
-                Mat mat = iterator.get();
-                releaseResources(mat);
-                iterator.increment();
-            }
-        } finally {
-            images.deallocate();
-        }
-
-    }
-
     /**
      * Convert OpenCV Mat to Java BufferedImage
      * Used for GIF creation
      */
-    public java.awt.image.BufferedImage matToBufferedImage(Mat mat) {
+    public static java.awt.image.BufferedImage matToBufferedImage(Mat mat) {
         if (mat == null || mat.empty()) {
             return null;
         }

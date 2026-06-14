@@ -37,7 +37,6 @@ public class PeopleTrackingService {
 
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
-    private final MatUtil matUtil;
     private final GifCreationService gifCreationService;
     private final StreamsProperties streamsProperties;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
@@ -50,12 +49,10 @@ public class PeopleTrackingService {
 
     public PeopleTrackingService(TelegramPublisherService telegramPublisherService,
                                DetectionHistoryService detectionHistoryService,
-                               MatUtil matUtil,
                                GifCreationService gifCreationService,
                                StreamsProperties streamsProperties) {
         this.telegramPublisherService = telegramPublisherService;
         this.detectionHistoryService = detectionHistoryService;
-        this.matUtil = matUtil;
         this.gifCreationService = gifCreationService;
         this.streamsProperties = streamsProperties;
     }
@@ -217,7 +214,7 @@ public class PeopleTrackingService {
                 for (PersonDetection person : allPeople) {
                     if (person != null && person.getRect() != null) {
                         // Draw rectangle with the FINAL determined identity (after tracking)
-                        matUtil.drawRectangleAndName(annotatedImg, displayName, person.getRect());
+                        MatUtil.drawRectangleAndName(annotatedImg, displayName, person.getRect());
                         log.debug("Drew rectangle for DETERMINED identity '{}' at ({}, {}, {}, {})",
                             displayName, person.getRect().x(), person.getRect().y(),
                             person.getRect().width(), person.getRect().height());
@@ -312,11 +309,11 @@ public class PeopleTrackingService {
                 jpgExt.deallocate();
             }
             if (originalImg != null) {
-                matUtil.releaseResources(originalImg);
+                MatUtil.releaseResources(originalImg);
             }
             // Clean up the annotated image
             if (annotatedImg != null) {
-                matUtil.releaseResources(annotatedImg);
+                MatUtil.releaseResources(annotatedImg);
             }
         }
     }

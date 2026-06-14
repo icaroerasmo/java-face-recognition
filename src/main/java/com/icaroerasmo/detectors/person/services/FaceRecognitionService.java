@@ -30,6 +30,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.icaroerasmo.utils.Constants.DESIRED_SCORE;
 import static org.bytedeco.opencv.global.opencv_core.CV_32FC1;
 import static org.bytedeco.opencv.global.opencv_imgcodecs.imread;
 
@@ -42,8 +43,6 @@ public class FaceRecognitionService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<StoredGallery> GALLERY_TYPE = new TypeReference<>() {};
 
-    // Normalized distance (1 - cosine similarity). Lower = better.
-    public static final double BASE_DISTANCE = 0.55;
     public static final String UNKNOWN = "Unknown";
 
     // Expected face ratio for calibration (5% of frame area is typical for good recognition)
@@ -124,21 +123,11 @@ public class FaceRecognitionService {
             double faceRatio = faceArea / frameArea;
             double adaptiveThreshold = calculateAdaptiveThreshold(faceRatio);
 
-            if (detectionDistance > adaptiveThreshold) {
-                log.debug("Detected person is {} with normalized distance {} (adaptive threshold: {}, face ratio: {}%) - classified as {}",
-                    detectedPerson,
-                    String.format("%.4f", detectionDistance),
-                    String.format("%.4f", adaptiveThreshold),
-                    String.format("%.4f", faceRatio * 100),
-                    UNKNOWN);
-                detectedPerson = UNKNOWN;
-            } else {
-                log.debug("Detected person is {} with normalized distance {} (adaptive threshold: {}, face ratio: {}%)",
+            log.debug("Detected person is {} with normalized distance {} (adaptive threshold: {}, face ratio: {}%)",
                     detectedPerson,
                     String.format("%.4f", detectionDistance),
                     String.format("%.4f", adaptiveThreshold),
                     String.format("%.4f", faceRatio * 100));
-            }
 
             return new FaceRecognition.DetectedFaces(detectedPerson, detectionDistance, matUtil.cloneRect(faceDetection.rect()));
         } catch (Exception e) {
@@ -486,12 +475,12 @@ public class FaceRecognitionService {
      */
     private double calculateAdaptiveThreshold(double faceRatio) {
         if (faceRatio >= EXPECTED_FACE_RATIO) {
-            double threshold = BASE_DISTANCE * (EXPECTED_FACE_RATIO / faceRatio);
+            double threshold = DESIRED_SCORE * (EXPECTED_FACE_RATIO / faceRatio);
             return Math.max(threshold, MIN_ADAPTIVE_THRESHOLD);
         }
 
         double factor = Math.sqrt(EXPECTED_FACE_RATIO / faceRatio);
-        double threshold = BASE_DISTANCE * factor;
+        double threshold = DESIRED_SCORE * factor;
         return Math.min(threshold, MAX_ADAPTIVE_THRESHOLD);
     }
 
