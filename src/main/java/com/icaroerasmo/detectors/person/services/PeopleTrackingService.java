@@ -877,12 +877,6 @@ public class PeopleTrackingService {
          */
         public IdentityResult getMostCommonIdentity() {
             int totalObservations = observations.size();
-            if (totalObservations < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
-                log.info("❌ VERDICT: Only {} captured frame(s) in track. Minimum required is {}, classifying as '{}'.",
-                    totalObservations, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
-                return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
-            }
-
             List<FaceObservation> usefulObservations = observations.stream()
                 .filter(observation -> !isUnknownIdentity(observation.personName))
                 .toList();
@@ -894,12 +888,6 @@ public class PeopleTrackingService {
                 totalObservations,
                 usefulFrames, String.format("%.1f", (usefulFrames * 100.0) / totalObservations),
                 unknownFrames, String.format("%.1f", (unknownFrames * 100.0) / totalObservations));
-
-            if (usefulFrames < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
-                log.info("❌ VERDICT: Only {} useful frame(s) out of {} total frames. Minimum required is {}, classifying as '{}'.",
-                    usefulFrames, totalObservations, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
-                return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
-            }
 
             Map<String, Integer> identityCounts = new java.util.HashMap<>();
             for (FaceObservation obs : usefulObservations) {
