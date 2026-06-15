@@ -1,5 +1,6 @@
 package com.icaroerasmo.utils;
 
+import org.bytedeco.javacpp.Pointer;
 import org.bytedeco.opencv.opencv_core.*;
 import org.springframework.stereotype.Component;
 
@@ -28,15 +29,19 @@ public class MatUtil {
         return new Rect(rect.x(), rect.y(), rect.width(), rect.height());
     }
 
-    public static void deallocateRects(Iterable<Rect> rects) {
+    public static void deallocateRects(Pointer ...rects) {
+        deallocateRects(Arrays.asList(rects));
+    }
+
+    public static void deallocateRects(Iterable<? extends Pointer> rects) {
         if (rects == null) {
             return;
         }
 
-        IdentityHashMap<Rect, Boolean> deallocatedRects = new IdentityHashMap<>();
-        for (Rect rect : rects) {
-            if (rect != null && deallocatedRects.put(rect, Boolean.TRUE) == null) {
-                rect.deallocate();
+        IdentityHashMap<Pointer, Boolean> deallocatedRects = new IdentityHashMap<>();
+        for (Pointer pointer : rects) {
+            if (pointer != null && deallocatedRects.put(pointer, Boolean.TRUE) == null) {
+                pointer.deallocate();
             }
         }
     }

@@ -43,6 +43,8 @@ public class FaceRecognitionService {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<StoredGallery> GALLERY_TYPE = new TypeReference<>() {};
 
+    // Normalized distance (1 - cosine similarity). Lower = better.
+    public static final double BASE_DISTANCE = 0.55;
     public static final String UNKNOWN = "Unknown";
 
     // Expected face ratio for calibration (5% of frame area is typical for good recognition)
@@ -474,12 +476,12 @@ public class FaceRecognitionService {
      */
     private double calculateAdaptiveThreshold(double faceRatio) {
         if (faceRatio >= EXPECTED_FACE_RATIO) {
-            double threshold = DESIRED_SCORE * (EXPECTED_FACE_RATIO / faceRatio);
+            double threshold = BASE_DISTANCE * (EXPECTED_FACE_RATIO / faceRatio);
             return Math.max(threshold, MIN_ADAPTIVE_THRESHOLD);
         }
 
         double factor = Math.sqrt(EXPECTED_FACE_RATIO / faceRatio);
-        double threshold = DESIRED_SCORE * factor;
+        double threshold = BASE_DISTANCE * factor;
         return Math.min(threshold, MAX_ADAPTIVE_THRESHOLD);
     }
 

@@ -195,6 +195,11 @@ public class RtspRecognitionRunner {
                             return; // Don't continue processing if no faces detected
                         }
 
+                    // Filter out faces with score > DESIRED_SCORE
+                    faces = faces.stream()
+                            .filter(face -> face.getDistance() <= DESIRED_SCORE)
+                            .collect(Collectors.toList());
+
                     if (faces.isEmpty()) {
                         log.debug("All detected faces in frame from camera '{}' have score > {}, skipping frame", cameraName, DESIRED_SCORE);
                         return;

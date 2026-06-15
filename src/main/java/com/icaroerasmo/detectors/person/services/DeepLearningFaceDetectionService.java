@@ -18,6 +18,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import static com.icaroerasmo.utils.MatUtil.deallocateRects;
 import static org.bytedeco.opencv.global.opencv_core.*;
 import static org.bytedeco.opencv.global.opencv_dnn.*;
 import static org.bytedeco.opencv.global.opencv_imgproc.*;
@@ -160,30 +161,9 @@ public class DeepLearningFaceDetectionService {
             // Return empty list instead of throwing - more resilient
             return new ArrayList<>();
         } finally {
-            if (meanValues != null) {
-                meanValues.deallocate();
-            }
-            if (inputSize != null) {
-                inputSize.deallocate();
-            }
-            if (resizedSize != null) {
-                resizedSize.deallocate();
-            }
-            if (outputNames != null) {
-                outputNames.deallocate();
-            }
-            if (outputs != null) {
-                outputs.deallocate();
-            }
-            if (paddingColor != null) {
-                paddingColor.deallocate();
-            }
-            if (roi != null) {
-                roi.deallocate();
-            }
-            if (roiRect != null) {
-                roiRect.deallocate();
-            }
+
+            deallocateRects(meanValues, inputSize, resizedSize, outputNames, outputs, paddingColor, roi, roiRect);
+
             // Release all resources in reverse order of creation
             MatUtil.releaseResources(blob, paddedImage, resizedImage);
         }
