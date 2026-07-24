@@ -18,6 +18,8 @@ face-recognition:
     person-detection-target: CPU
     enable-opencl: true
     fallback-to-cpu: true
+  detection:
+    person-confidence-threshold: 0.8
   telegram:
     # Bot token from Telegram BotFather - set this in config/config.yaml or environment variable
     bot-token: "${TELEGRAM_BOT_TOKEN:}"
