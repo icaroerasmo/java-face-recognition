@@ -21,6 +21,9 @@ import java.util.function.Consumer;
 import static com.icaroerasmo.utils.Constants.FPS;
 import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_PANIC;
 import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
+import static org.bytedeco.opencv.global.opencv_core.CV_8UC1;
+import static org.bytedeco.opencv.global.opencv_core.CV_8UC3;
+import static org.bytedeco.opencv.global.opencv_core.CV_8UC4;
 
 @Log4j2
 @Service
@@ -181,7 +184,7 @@ public class RtspFrameExtractorService {
         // - Compressed (H.264): ~2-5MB per frame
         // - Buffer needs to hold multiple frames for smooth playback
         // - UDP needs larger buffer due to packet reordering
-        int bufferSize = 51200;
+        int bufferSize = 50 * 1024 * 1024;
         grabber.setOption("buffer_size", String.valueOf(bufferSize));
 
         if (isUdp) {
@@ -198,7 +201,7 @@ public class RtspFrameExtractorService {
             grabber.setOption("err_detect", "ignore_err");     // Ignore decoding errors
             grabber.setOption("skip_frame", "noref");          // Skip non-reference frames if needed
 
-            log.info("Configured UDP-specific settings: buffer={}MB, reorder_queue=5000", bufferSize / 1048576);
+            log.info("Configured UDP-specific settings: buffer={}MB, reorder_queue=5000", bufferSize / (1024 * 1024));
         } else {
             // TCP-specific settings for low latency
             grabber.setOption("max_delay", "500000");          // 0.5 seconds for TCP
@@ -206,7 +209,7 @@ public class RtspFrameExtractorService {
             grabber.setOption("fflags", "nobuffer+fastseek+flush_packets"); // Low latency flags
             grabber.setOption("rtsp_flags", "prefer_tcp");     // Prefer TCP
 
-            log.info("Configured TCP-specific settings: buffer={}MB, low latency mode", bufferSize / 1048576);
+            log.info("Configured TCP-specific settings: buffer={}MB, low latency mode", bufferSize / (1024 * 1024));
         }
 
         // Common flags
@@ -238,7 +241,7 @@ public class RtspFrameExtractorService {
         // PRODUCER THREAD: Grabs frames and converts to byte arrays
         Thread producer = new Thread(() -> {
             int nullFrameCount = 0;
-            int maxNullFrames = 150;
+            final int maxNullFrames = Math.max(1, streamsProperties.getMaxConsecutiveNullFrames());
             long lastQueuedAtNs = 0;
 
             try {
@@ -250,7 +253,7 @@ public class RtspFrameExtractorService {
                     Mat mat = null;
 
                     try {
-                        frame = grabber.grab();
+                        frame = grabber.grabImage();
 
                         if (frame == null) {
                             nullFrameCount++;
@@ -366,8 +369,14 @@ public class RtspFrameExtractorService {
 
                     Mat mat = null;
                     try {
+                        int matType = resolveMatType(frameData.channels);
+                        if (matType < 0) {
+                            log.warn("Unsupported channel count {} for frame from {}", frameData.channels, rtspUrl);
+                            continue;
+                        }
+
                         // Reconstruct Mat from byte array
-                        mat = new Mat(frameData.height, frameData.width, org.bytedeco.opencv.global.opencv_core.CV_8UC3);
+                        mat = new Mat(frameData.height, frameData.width, matType);
 
                         // Ensure the Mat has the correct size
                         int expectedSize = frameData.width * frameData.height * frameData.channels;
@@ -427,6 +436,15 @@ public class RtspFrameExtractorService {
                 log.warn("Error closing converter: {}", e.getMessage());
             }
         }
+    }
+
+    private int resolveMatType(int channels) {
+        return switch (channels) {
+            case 1 -> CV_8UC1;
+            case 3 -> CV_8UC3;
+            case 4 -> CV_8UC4;
+            default -> -1;
+        };
     }
 
 

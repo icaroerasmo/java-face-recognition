@@ -25,4 +25,7 @@ public class FaceRecognitionProperties {
 
     @NestedConfigurationProperty
     private AccelerationProperties acceleration = new AccelerationProperties();
+
+    @NestedConfigurationProperty
+    private DetectionProperties detection = new DetectionProperties();
 }

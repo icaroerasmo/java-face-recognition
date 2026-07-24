@@ -36,4 +36,10 @@ public class StreamsProperties {
      * This caps memory growth for long-lived tracks.
      */
     private int trackingMaxFrames = 30;
+
+    /**
+     * Maximum number of consecutive null image reads before the extractor reconnects the stream.
+     * Higher values tolerate brief RTSP stalls on heavier streams.
+     */
+    private int maxConsecutiveNullFrames = 300;
 }

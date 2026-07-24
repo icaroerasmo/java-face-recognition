@@ -3,6 +3,7 @@ face-recognition:
     processing-fps: 5
     frame-queue-capacity: 2
     tracking-max-frames: 30
+    max-consecutive-null-frames: 300
     cameras:
       - name: "backyard"
         url: "rtsp://localhost:8554/backyard?video&audio"
@@ -17,6 +18,8 @@ face-recognition:
     person-detection-target: CPU
     enable-opencl: true
     fallback-to-cpu: true
+  detection:
+    person-confidence-threshold: 0.8
   telegram:
     # Bot token from Telegram BotFather - set this in config/config.yaml or environment variable
     bot-token: "${TELEGRAM_BOT_TOKEN:}"

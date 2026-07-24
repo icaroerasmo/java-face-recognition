@@ -33,7 +33,6 @@ public class PersonDetector implements IDetector {
     private static final String PROTO_FILE = "opencv/SSD_MobileNet_prototxt.txt";
     private static final String MODEL_FILE = "opencv/SSD_MobileNet.caffemodel";
     private static final int INPUT_SIZE = 300;
-    private static final double CONFIDENCE_THRESHOLD = 0.7; // 70% confidence
 
     // Class index for "person" in MobileNet-SSD (COCO dataset)
     private static final int PERSON_CLASS_ID = 15;
@@ -45,6 +44,7 @@ public class PersonDetector implements IDetector {
     private final Net net;
     private final MatUtil matUtil;
     private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
+    private final double personConfidenceThreshold;
 
     public PersonDetector(
             MatUtil matUtil,
@@ -53,6 +53,9 @@ public class PersonDetector implements IDetector {
     ) {
         this.matUtil = matUtil;
         this.dnnInferenceCoordinatorHelper = dnnInferenceCoordinatorHelper;
+        this.personConfidenceThreshold = normalizeConfidenceThreshold(
+                faceRecognitionProperties.getDetection().getPersonConfidenceThreshold()
+        );
         try {
             String protoPath = OpenCvResourceHelper.getResourcePath(PROTO_FILE, PersonDetector.class);
             String modelPath = OpenCvResourceHelper.getResourcePath(MODEL_FILE, PersonDetector.class);
@@ -71,7 +74,8 @@ public class PersonDetector implements IDetector {
                 throw new IllegalStateException("Failed to load network - network is null or empty");
             }
 
-            log.info("Person detection model loaded successfully");
+            log.info("Person detection model loaded successfully with confidence threshold {}",
+                    String.format("%.2f", this.personConfidenceThreshold));
         } catch (Exception e) {
             log.error("Failed to load person detection model: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to initialize person detection model", e);
@@ -149,7 +153,7 @@ public class PersonDetector implements IDetector {
                 float confidence = indexer.get(i, 2);
 
                 // Check if detection is a person with sufficient confidence
-                if (classId == PERSON_CLASS_ID && confidence > CONFIDENCE_THRESHOLD) {
+                if (classId == PERSON_CLASS_ID && confidence > personConfidenceThreshold) {
                     float x1 = indexer.get(i, 3);
                     float y1 = indexer.get(i, 4);
                     float x2 = indexer.get(i, 5);
@@ -255,6 +259,10 @@ public class PersonDetector implements IDetector {
         return switch (backend) {
             case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
         };
+    }
+
+    private static double normalizeConfidenceThreshold(double threshold) {
+        return Math.max(0.0, Math.min(1.0, threshold));
     }
 
     private static int mapTarget(AccelerationProperties.Target target) {
