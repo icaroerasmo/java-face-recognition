@@ -80,98 +80,127 @@ public class GifCreationService {
         org.bytedeco.javacv.FFmpegFrameRecorder recorder = null;
         org.bytedeco.javacv.Java2DFrameConverter converter = new org.bytedeco.javacv.Java2DFrameConverter();
         int gifFps = getGifFps();
+        java.io.File tempFile = null;
 
         try {
             // Get dimensions from first frame
             byte[] firstFrameBytes = frameImages.getFirst();
-            BytePointer imagePointer = new BytePointer(firstFrameBytes);
-            Mat firstFrame = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
-                new org.bytedeco.opencv.opencv_core.Mat(imagePointer),
-                org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_COLOR
-            );
-            imagePointer.deallocate();
-
-            if (firstFrame.empty()) {
-                log.error("Failed to decode first frame");
-                return null;
-            }
-
-            int height = firstFrame.rows();
-            int width = firstFrame.cols();
-
-            // Calculate scaled dimensions maintaining aspect ratio
-            int scaledWidth = GIF_WIDTH;
-            int scaledHeight = (int) ((double) height / width * GIF_WIDTH);
-
-            matUtil.releaseResources(firstFrame);
-
-            log.info("Creating MP4 video: {}x{} pixels, {} frames, {} fps",
-                scaledWidth, scaledHeight, frameImages.size(), gifFps);
-
-            // Create temporary file for video
-            java.io.File tempFile = java.io.File.createTempFile("tracking_", ".mp4");
-            tempFile.deleteOnExit();
-
-            // Initialize video recorder
-            recorder = new org.bytedeco.javacv.FFmpegFrameRecorder(tempFile.getAbsolutePath(), scaledWidth, scaledHeight);
-            recorder.setVideoCodec(org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264);
-            recorder.setFormat("mp4");
-            recorder.setFrameRate(gifFps);
-            recorder.setPixelFormat(org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P);
-            recorder.setVideoBitrate(2000000); // 2 Mbps
-            recorder.start();
-
-            // Process each frame
-            for (int i = 0; i < frameImages.size(); i++) {
-                byte[] frameBytes = frameImages.get(i);
-
-                // Decode frame
-                BytePointer framePointer = new BytePointer(frameBytes);
-                Mat frameMat = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
-                    new org.bytedeco.opencv.opencv_core.Mat(framePointer),
+            BytePointer imagePointer = null;
+            Mat encodedFirstFrame = null;
+            Mat firstFrame = null;
+            try {
+                imagePointer = new BytePointer(firstFrameBytes);
+                encodedFirstFrame = new org.bytedeco.opencv.opencv_core.Mat(imagePointer);
+                firstFrame = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
+                    encodedFirstFrame,
                     org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_COLOR
                 );
-                framePointer.deallocate();
 
-                if (frameMat.empty()) {
-                    log.warn("Failed to decode frame {}, skipping", i);
-                    continue;
+                if (firstFrame.empty()) {
+                    log.error("Failed to decode first frame");
+                    return null;
                 }
 
-                // Resize frame
-                Mat resizedFrame = new Mat();
-                org.bytedeco.opencv.global.opencv_imgproc.resize(frameMat, resizedFrame,
-                    new Size(scaledWidth, scaledHeight));
-                matUtil.releaseResources(frameMat);
+                int height = firstFrame.rows();
+                int width = firstFrame.cols();
 
-                // Convert to BufferedImage
-                java.awt.image.BufferedImage bufferedImage = matUtil.matToBufferedImage(resizedFrame);
-                matUtil.releaseResources(resizedFrame);
+                // Calculate scaled dimensions maintaining aspect ratio
+                int scaledWidth = GIF_WIDTH;
+                int scaledHeight = (int) ((double) height / width * GIF_WIDTH);
 
-                if (bufferedImage != null) {
-                    // Convert to Frame and record
-                    org.bytedeco.javacv.Frame frame = converter.convert(bufferedImage);
-                    recorder.record(frame);
+                log.info("Creating MP4 video: {}x{} pixels, {} frames, {} fps",
+                    scaledWidth, scaledHeight, frameImages.size(), gifFps);
+
+                // Create temporary file for video
+                tempFile = java.io.File.createTempFile("tracking_", ".mp4");
+                tempFile.deleteOnExit();
+
+                // Initialize video recorder
+                recorder = new org.bytedeco.javacv.FFmpegFrameRecorder(tempFile.getAbsolutePath(), scaledWidth, scaledHeight);
+                recorder.setVideoCodec(org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264);
+                recorder.setFormat("mp4");
+                recorder.setFrameRate(gifFps);
+                recorder.setPixelFormat(org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P);
+                recorder.setVideoBitrate(2000000); // 2 Mbps
+                recorder.start();
+
+                // Process each frame
+                for (int i = 0; i < frameImages.size(); i++) {
+                    byte[] frameBytes = frameImages.get(i);
+
+                    BytePointer framePointer = null;
+                    Mat encodedFrame = null;
+                    Mat frameMat = null;
+                    Mat resizedFrame = null;
+                    Size resizedSize = null;
+                    try {
+                        // Decode frame
+                        framePointer = new BytePointer(frameBytes);
+                        encodedFrame = new org.bytedeco.opencv.opencv_core.Mat(framePointer);
+                        frameMat = org.bytedeco.opencv.global.opencv_imgcodecs.imdecode(
+                            encodedFrame,
+                            org.bytedeco.opencv.global.opencv_imgcodecs.IMREAD_COLOR
+                        );
+
+                        if (frameMat.empty()) {
+                            log.warn("Failed to decode frame {}, skipping", i);
+                            continue;
+                        }
+
+                        // Resize frame
+                        resizedFrame = new Mat();
+                        resizedSize = new Size(scaledWidth, scaledHeight);
+                        org.bytedeco.opencv.global.opencv_imgproc.resize(frameMat, resizedFrame, resizedSize);
+
+                        // Convert to BufferedImage
+                        java.awt.image.BufferedImage bufferedImage = matUtil.matToBufferedImage(resizedFrame);
+
+                        if (bufferedImage != null) {
+                            // Convert to Frame and record
+                            org.bytedeco.javacv.Frame frame = converter.convert(bufferedImage);
+                            recorder.record(frame);
+                        }
+
+                        if ((i + 1) % 20 == 0) {
+                            log.debug("Processed {}/{} frames", i + 1, frameImages.size());
+                        }
+                    } finally {
+                        if (framePointer != null) {
+                            framePointer.deallocate();
+                        }
+                        if (encodedFrame != null) {
+                            encodedFrame.deallocate();
+                        }
+                        if (resizedSize != null) {
+                            resizedSize.deallocate();
+                        }
+                        matUtil.releaseResources(frameMat, resizedFrame);
+                    }
                 }
 
-                if ((i + 1) % 20 == 0) {
-                    log.debug("Processed {}/{} frames", i + 1, frameImages.size());
+                recorder.stop();
+                recorder.release();
+                recorder = null;
+
+                // Read the video file into byte array
+                byte[] videoBytes = java.nio.file.Files.readAllBytes(tempFile.toPath());
+                boolean deleted = tempFile.delete();
+                tempFile = null;
+                if (!deleted) {
+                    log.warn("Failed to delete temporary video file");
                 }
+
+                log.info("✅ Successfully created MP4 video: {} bytes", videoBytes.length);
+                return videoBytes;
+            } finally {
+                if (imagePointer != null) {
+                    imagePointer.deallocate();
+                }
+                if (encodedFirstFrame != null) {
+                    encodedFirstFrame.deallocate();
+                }
+                matUtil.releaseResources(firstFrame);
             }
-
-            recorder.stop();
-            recorder.release();
-            recorder = null;
-
-            // Read the video file into byte array
-            byte[] videoBytes = java.nio.file.Files.readAllBytes(tempFile.toPath());
-            boolean deleted = tempFile.delete();
-            if (!deleted) {
-                log.warn("Failed to delete temporary video file: {}", tempFile.getAbsolutePath());
-            }
-
-            log.info("✅ Successfully created MP4 video: {} bytes", videoBytes.length);
-            return videoBytes;
 
         } catch (Exception e) {
             log.error("Failed to create MP4 video: {}", e.getMessage(), e);
@@ -189,6 +218,9 @@ public class GifCreationService {
                 converter.close();
             } catch (Exception e) {
                 log.warn("Error closing converter: {}", e.getMessage());
+            }
+            if (tempFile != null && tempFile.exists() && !tempFile.delete()) {
+                log.warn("Failed to delete temporary video file: {}", tempFile.getAbsolutePath());
             }
         }
     }
