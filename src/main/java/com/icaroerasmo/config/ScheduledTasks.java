@@ -1,13 +1,13 @@
 package com.icaroerasmo.config;
 
+import com.icaroerasmo.detectors.person.services.DetectionHistoryService;
 import com.icaroerasmo.properties.TrainingProperties;
-import com.icaroerasmo.service.DetectionHistoryService;
-import com.icaroerasmo.service.FaceRecognitionService;
-import com.icaroerasmo.service.FaceRecognizerHolder;
-import com.icaroerasmo.service.PeopleTrackingService;
+import com.icaroerasmo.detectors.person.services.FaceRecognitionService;
+import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
+import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
+import com.icaroerasmo.detectors.person.services.PeopleTrackingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.bytedeco.opencv.opencv_face.FaceRecognizer;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -26,7 +26,7 @@ public class ScheduledTasks {
 
     private final DetectionHistoryService detectionHistoryService;
     private final FaceRecognitionService faceRecognitionService;
-    private final FaceRecognizerHolder faceRecognizerHolder;
+    private final FaceRecognizerHolderService faceRecognizerHolderService;
     private final TrainingProperties trainingProperties;
     private final PeopleTrackingService peopleTrackingService;
 
@@ -63,8 +63,8 @@ public class ScheduledTasks {
                 log.warn("=== TRAINING DATA CHANGES DETECTED ===");
                 log.info("Starting automatic retraining due to detected changes...");
 
-                FaceRecognizer newRecognizer = faceRecognitionService.train(trainingRootPath);
-                faceRecognizerHolder.updateRecognizer(newRecognizer);
+                FaceRecognitionRuntime newRecognizer = faceRecognitionService.train(trainingRootPath);
+                faceRecognizerHolderService.updateRecognizer(newRecognizer);
 
                 log.info("=== AUTOMATIC RETRAINING COMPLETED SUCCESSFULLY ===");
                 log.info("Model updated in database and active recognizer replaced");
