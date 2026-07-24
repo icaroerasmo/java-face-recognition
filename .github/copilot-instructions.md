@@ -37,5 +37,6 @@ There is no dedicated lint command configured in `pom.xml` or in GitHub Actions.
 - The SFace runtime depends on the bundled `src/main/resources/opencv/face_recognition_sface_2021dec.onnx` model and on SCRFD detections carrying 5 landmarks so `alignCrop()` can normalize faces before embedding extraction.
 - When adding OpenCV/JavaCV logic, follow the existing pattern of explicit cleanup for `Mat`, `BytePointer`, `MatVector`, and similar native objects; this codebase does not rely on GC to reclaim native memory safely.
 - Release automation is tied to GitHub Actions: creating a `release/*` branch updates the Maven version in `pom.xml`, and merging a pull request into `main` publishes the container image to GHCR.
-- After a release is merged and the publish workflow completes, update deployed environments by pulling `ghcr.io/icaroerasmo/java-face-recognition:latest` and recreating the `rtsp-face-recognition` container from `the private production compose file`.
-- For local validation before release, build and run `ghcr.io/icaroerasmo/java-face-recognition:local` via the `a private local deployment override` override instead of editing the main compose file.
+- For local container validation, build
+  `ghcr.io/icaroerasmo/java-face-recognition:local`. Keep environment-specific
+  deployment instructions in the private deployment repository.

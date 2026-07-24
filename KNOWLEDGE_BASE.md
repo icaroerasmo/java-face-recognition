@@ -1,6 +1,8 @@
 # RTSP Face Recognition Knowledge Base
 
-This document is the operational knowledge base for **rtsp-face-recognition**. It describes the application architecture, runtime configuration, troubleshooting tips, and the release and deployment workflow used by this repository and the production deployment stack.
+This document is the operational knowledge base for **rtsp-face-recognition**.
+It describes the application architecture, runtime configuration,
+troubleshooting tips, and release workflow.
 
 ## What the service does
 
@@ -31,7 +33,7 @@ For heavier cameras, the extractor now uses:
 - `grabImage()` instead of generic `grab()`
 - channel-aware `Mat` reconstruction
 
-These changes help reduce stalls on streams such as `high-load camera`.
+These changes help reduce stalls on high-load streams.
 
 ### 2. Person detection
 
@@ -96,22 +98,6 @@ The runtime stores:
 - serialized face embeddings in `trained_dataset`
 - folder hashes in `training_metadata`
 
-## Deployment layout
-
-The application source lives in:
-
-`the local source checkout`
-
-The production deployment deployment that runs the published image lives in:
-
-`the private deployment checkout`
-
-In the production deployment stack:
-
-- `RTSP relay` relays/transcodes RTSP streams
-- `rtsp-face-recognition` consumes those relayed streams
-- `live-stream consumer` builds the Telegram live layout from the same relayed streams
-
 ## Local development and validation
 
 To build the application locally:
@@ -120,17 +106,6 @@ To build the application locally:
 mvn test
 docker build -t ghcr.io/icaroerasmo/java-face-recognition:local .
 ```
-
-To run the local image in the production deployment stack:
-
-```bash
-cd the private deployment checkout
-docker compose -f docker-compose.yaml -f docker-compose.local.yaml up -d --force-recreate rtsp-face-recognition
-```
-
-`docker-compose.local.yaml` overrides the image to:
-
-`ghcr.io/icaroerasmo/java-face-recognition:local`
 
 ## Release workflow
 
@@ -185,46 +160,8 @@ Behavior:
    - create the release tag
    - publish the versioned image
    - update `latest`
-8. Update the production deployment deployment to use `ghcr.io/icaroerasmo/java-face-recognition:latest`.
-9. Recreate the containers in `the private deployment checkout`.
-
-## Production deployment in production deployment
-
-The production compose file is:
-
-`the private production compose file`
-
-After a successful release:
-
-1. make sure `rtsp-face-recognition` points to `ghcr.io/icaroerasmo/java-face-recognition:latest`
-2. recreate the stack containers
-
-Example:
-
-```bash
-cd the private deployment checkout
-docker compose up -d --force-recreate
-```
 
 ## Troubleshooting
-
-### `high-load camera` freezes or repeats the same frame
-
-Symptoms:
-
-- identical snapshots across multiple seconds
-- repeated-frame watchdog resets in `live-stream consumer`
-- stale detections in face recognition
-
-Likely cause:
-
-- unstable upstream camera/RTSP relay relay rather than application crash
-
-First response:
-
-1. restart `RTSP relay`
-2. restart `rtsp-face-recognition`
-3. restart `live-stream consumer`
 
 ### Person detector sees cars as people
 
@@ -241,7 +178,7 @@ Tradeoff:
 
 Check:
 
-- `RTSP relay` stream health
+- upstream RTSP stream health
 - frame freshness
 - person-detection logs
 - training data availability
@@ -249,10 +186,10 @@ Check:
 
 ### Heavy camera behavior
 
-For heavier cameras like `high-load camera`, prefer:
+For heavier cameras, prefer:
 
 - lower effective FPS
 - short queues
 - stable RTSP transport
 - enough probe/analyze time for consumers
-- `RTSP relay` transcoding to a predictable H.264 output when the source is less stable
+- transcoding to a predictable H.264 output when the source is less stable
