@@ -3,6 +3,7 @@ face-recognition:
     processing-fps: 5
     frame-queue-capacity: 2
     tracking-max-frames: 30
+    max-consecutive-null-frames: 300
     cameras:
       - name: "backyard"
         url: "rtsp://localhost:8554/backyard?video&audio"
