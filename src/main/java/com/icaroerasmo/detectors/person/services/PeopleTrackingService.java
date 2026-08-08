@@ -81,9 +81,8 @@ public class PeopleTrackingService {
     // Increased to 500px to track people walking away or across the frame
     private static final double MAX_POSITION_DISTANCE = 500.0;
 
-    // Face similarity threshold for tracking (very lenient to handle face angle changes)
-    // Set to 200 to allow significant variations when person turns their head/back
-    private static final int TRACKING_SIMILARITY_THRESHOLD = 200;
+    // Perceptual-hash distance threshold (0 is identical, 100 is completely different).
+    private static final int TRACKING_SIMILARITY_THRESHOLD = 40;
 
     // Minimum tracking duration before sending (reduced to 1.5 seconds)
     private static final long MIN_TRACKING_DURATION_MS = 1500;
@@ -136,7 +135,7 @@ public class PeopleTrackingService {
                 double distanceMoved = track.getTotalDistanceMoved();
 
                 // Determine identity from accumulated observations
-                IdentityResult identityResult = track.getMostCommonIdentity();
+                IdentityResult identityResult = determineIdentity(track, cameraName);
                 String determinedIdentity = identityResult.getPersonName();
                 int identityFrameCount = identityResult.getFrameCount();
 
@@ -530,9 +529,9 @@ public class PeopleTrackingService {
             if (trackDuration > 2000) { // More than 2 seconds of tracking
                 // For close distances (<150px), be very lenient - probably same person
                 if (distance < 150) {
-                    adaptiveSimilarityThreshold = 300; // Very lenient
+                    adaptiveSimilarityThreshold = 55;
                 } else {
-                    adaptiveSimilarityThreshold = 250; // Lenient
+                    adaptiveSimilarityThreshold = 45;
                 }
                 log.debug("📈 Using adaptive threshold {} (track age: {}ms, distance: {}px)",
                     adaptiveSimilarityThreshold, trackDuration, (int)distance);
@@ -566,7 +565,7 @@ public class PeopleTrackingService {
             String completionReason
     ) {
         int frameCount = track.observations.size();
-        IdentityResult identityResult = track.getMostCommonIdentity();
+        IdentityResult identityResult = determineIdentity(track, cameraName);
         String determinedIdentity = identityResult.getPersonName();
         int identityFrameCount = identityResult.getFrameCount();
 
@@ -603,6 +602,28 @@ public class PeopleTrackingService {
         cameraTrackedPeople.remove(track);
         track.cleanup();
         return TrackingResult.notReady();
+    }
+
+    private IdentityResult determineIdentity(TrackedPerson track, String cameraName) {
+        IdentityResult identityResult = track.getMostCommonIdentity();
+        if (!isUnknownIdentity(identityResult.getPersonName())) {
+            return identityResult;
+        }
+
+        IdentityResult consistentCandidate = track.getConsistentKnownCandidate();
+        if (consistentCandidate != null
+                && consistentCandidate.getFrameCount() >= 2
+                && track.observations.size() <= MIN_KNOWN_FRAMES_FOR_IDENTITY
+                && detectionHistoryService.wasKnownPersonDetectedRecently(
+                    cameraName,
+                    consistentCandidate.getPersonName()
+                )) {
+            log.info("✅ VERDICT: Continuing recent confirmed identity '{}' across a short track fragment with {} agreeing frame(s)",
+                consistentCandidate.getPersonName(), consistentCandidate.getFrameCount());
+            return consistentCandidate;
+        }
+
+        return identityResult;
     }
 
     /**
@@ -951,6 +972,25 @@ public class PeopleTrackingService {
             log.info("✅ VERDICT: Identity pool winner is '{}' with {} useful frames ({}%) out of {} useful / {} total observations",
                 winningIdentity, winningCount, String.format("%.1f", percentage), usefulFrames, totalObservations);
             return new IdentityResult(winningIdentity, winningCount);
+        }
+
+        public IdentityResult getConsistentKnownCandidate() {
+            String candidate = null;
+            int count = 0;
+
+            for (FaceObservation observation : observations) {
+                if (isUnknownIdentity(observation.personName)) {
+                    continue;
+                }
+                if (candidate == null) {
+                    candidate = observation.personName;
+                } else if (!candidate.equals(observation.personName)) {
+                    return null;
+                }
+                count++;
+            }
+
+            return candidate != null ? new IdentityResult(candidate, count) : null;
         }
 
 

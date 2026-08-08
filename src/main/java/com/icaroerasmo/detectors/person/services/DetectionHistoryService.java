@@ -114,13 +114,23 @@ public class DetectionHistoryService {
         return true;
     }
 
+    public boolean wasKnownPersonDetectedRecently(String cameraName, String personName) {
+        CameraDetectionHistory history = cameraHistory.get(cameraName);
+        if (history == null) {
+            return false;
+        }
+
+        DetectionRecord recentKnownPerson = history.getRecentKnownPerson(System.currentTimeMillis());
+        return recentKnownPerson != null && personName.equals(recentKnownPerson.personKey);
+    }
+
     /**
      * Update camera-specific detection history
      */
     private void updateCameraHistory(String cameraName, String imageHash, long timestamp, String detectedPeopleKey, byte[] faceHash) {
         CameraDetectionHistory camHistory = cameraHistory.computeIfAbsent(cameraName, k -> new CameraDetectionHistory());
         boolean isUnknown = detectedPeopleKey.contains("Unknown");
-        camHistory.addDetection(imageHash, timestamp, isUnknown, faceHash);
+        camHistory.addDetection(imageHash, timestamp, detectedPeopleKey, isUnknown, faceHash);
     }
 
     /**
@@ -192,8 +202,8 @@ public class DetectionHistoryService {
         private DetectionRecord lastKnownPerson;
         private DetectionRecord lastUnknownPerson;
 
-        void addDetection(String imageHash, long timestamp, boolean isUnknown, byte[] faceHash) {
-            DetectionRecord record = new DetectionRecord(imageHash, timestamp, null, faceHash);
+        void addDetection(String imageHash, long timestamp, String personKey, boolean isUnknown, byte[] faceHash) {
+            DetectionRecord record = new DetectionRecord(imageHash, timestamp, personKey, faceHash);
             if (isUnknown) {
                 lastUnknownPerson = record;
             } else {
