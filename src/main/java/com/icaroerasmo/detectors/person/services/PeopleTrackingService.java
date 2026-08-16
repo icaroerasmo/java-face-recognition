@@ -120,6 +120,7 @@ public class PeopleTrackingService {
      * Schedule a timeout notification that will be sent if person is not detected again.
      * This ensures notifications are sent even if person leaves before threshold is reached.
      * Now with longer timeout (5s) to better consolidate detections.
+     * For continued tracks (with confirmed identity), the track is reset instead of removed.
      */
     private void scheduleTimeoutNotification(TrackedPerson track, String cameraName, List<TrackedPerson> cameraTrackedPeople) {
         track.pendingNotification = scheduler.schedule(() -> {
@@ -139,6 +140,15 @@ public class PeopleTrackingService {
                 String determinedIdentity = identityResult.getPersonName();
                 int identityFrameCount = identityResult.getFrameCount();
 
+                // Use confirmed identity if available and valid, otherwise use computed identity
+                String confirmedIdentity = track.getConfirmedIdentity();
+                if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)) {
+                    log.debug("Using confirmed identity '{}' instead of computed '{}' for timeout notification",
+                        confirmedIdentity, determinedIdentity);
+                    determinedIdentity = confirmedIdentity;
+                    identityFrameCount = frameCount; // Use all frames since identity is confirmed
+                }
+
                 log.info("⏰ TIMEOUT NOTIFICATION: Camera '{}' - Person '{}' disappeared after {} frames over {}ms (moved {}px) - sending notification",
                         cameraName, determinedIdentity, frameCount, trackingDuration, (int)distanceMoved);
 
@@ -152,9 +162,20 @@ public class PeopleTrackingService {
                 // Send notification with identity frame count and total tracked frames
                 sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
 
-                // Remove from tracking and cleanup
-                cameraTrackedPeople.remove(track);
-                track.cleanup();
+                // Check if this is a continued track (has confirmed identity from previous finalization)
+                // If so, reset instead of removing to preserve identity for re-identification
+                if (track.getConfirmedIdentity() != null && !isUnknownIdentity(track.getConfirmedIdentity())) {
+                    log.info("Camera '{}': Resetting continued track for '{}' after timeout (preserving identity)",
+                        cameraName, track.getConfirmedIdentity());
+                    long resetTimestamp = System.currentTimeMillis();
+                    track.resetTrack(track.getConfirmedIdentity(), resetTimestamp);
+                    // Reschedule timeout for the reset track
+                    scheduleTimeoutNotification(track, cameraName, cameraTrackedPeople);
+                } else {
+                    // Original behavior: remove from tracking and cleanup
+                    cameraTrackedPeople.remove(track);
+                    track.cleanup();
+                }
 
             } catch (Exception e) {
                 log.error("Error in timeout notification for camera '{}': {}", cameraName, e.getMessage(), e);
@@ -352,7 +373,7 @@ public class PeopleTrackingService {
         List<TrackedPerson> cameraTrackedPeople = trackedPeople.computeIfAbsent(cameraName, k -> new ArrayList<>());
 
         // Find if this person matches an existing tracked person
-        TrackedPerson matchedTrack = findMatchingTrackedPerson(cameraTrackedPeople, faceRect, faceHash, now);
+        TrackedPerson matchedTrack = findMatchingTrackedPerson(cameraTrackedPeople, faceRect, faceHash, now, personName);
 
         if (matchedTrack != null) {
             // Update existing track - clone Rect to avoid issues if original is deallocated
@@ -489,9 +510,11 @@ public class PeopleTrackingService {
     /**
      * Find a tracked person that matches the current detection.
      * Uses adaptive matching - more lenient for established tracks to handle people turning around.
+     * Also supports identity-based matching for tracks with confirmed identities.
      */
-    private TrackedPerson findMatchingTrackedPerson(List<TrackedPerson> tracks, Rect faceRect, byte[] faceHash, long currentTime) {
-        log.debug("🔍 MATCHING: Checking {} existing tracks for person at ({}, {})", tracks.size(), faceRect.x(), faceRect.y());
+    private TrackedPerson findMatchingTrackedPerson(List<TrackedPerson> tracks, Rect faceRect, byte[] faceHash, long currentTime, String personName) {
+        log.debug("🔍 MATCHING: Checking {} existing tracks for person at ({}, {}) with identity '{}'",
+            tracks.size(), faceRect.x(), faceRect.y(), personName);
 
         for (TrackedPerson track : tracks) {
             Rect lastRect = track.getLatestRect();
@@ -520,6 +543,10 @@ public class PeopleTrackingService {
                 continue; // Person moved too far
             }
 
+            // Check if this track has a confirmed identity from a previous finalization
+            String confirmedIdentity = track.getConfirmedIdentity();
+            boolean hasConfirmedIdentity = confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity);
+
             // Adaptive similarity threshold based on tracking duration
             // For established tracks (>2 seconds), be more lenient about face similarity
             // This helps track people who turn their back or change angles
@@ -537,15 +564,48 @@ public class PeopleTrackingService {
                     adaptiveSimilarityThreshold, trackDuration, (int)distance);
             }
 
+            // Extra leniency for tracks with confirmed identities
+            // These tracks have already been identified, so we want to keep them alive
+            if (hasConfirmedIdentity) {
+                // If the current detection matches the confirmed identity, be very lenient
+                if (!isUnknownIdentity(personName) && personName.equals(confirmedIdentity)) {
+                    // Same identity confirmed - use very lenient threshold
+                    adaptiveSimilarityThreshold = Math.max(adaptiveSimilarityThreshold, 65);
+                    log.debug("📈 Using extra lenient threshold {} for confirmed identity '{}' match",
+                        adaptiveSimilarityThreshold, confirmedIdentity);
+                } else if (isUnknownIdentity(personName)) {
+                    // Unknown face but track has confirmed identity - be lenient if position is close
+                    if (distance < 200) {
+                        adaptiveSimilarityThreshold = Math.max(adaptiveSimilarityThreshold, 60);
+                        log.debug("📈 Using lenient threshold {} for confirmed identity '{}' (unknown face, close position)",
+                            adaptiveSimilarityThreshold, confirmedIdentity);
+                    }
+                }
+            }
+
             // Check face hash similarity
             int similarity = computeSimilarity(faceHash, track.getLatestFaceHash());
-            log.debug("📊 Track at ({}, {}) similarity: {} (threshold: {}), distance: {}px, age: {}ms",
+            log.debug("📊 Track at ({}, {}) similarity: {} (threshold: {}), distance: {}px, age: {}ms, confirmedIdentity: {}",
                 lastRect.x(), lastRect.y(), similarity, adaptiveSimilarityThreshold,
-                (int)distance, timeSinceLastSeen);
+                (int)distance, timeSinceLastSeen, confirmedIdentity);
+
+            // SAFEGUARD: Reset confirmed identity ONLY if a DIFFERENT known person appears
+            // This prevents different people from inheriting identity when appearing in similar positions
+            // BUT does NOT reset when face is obscured/unknown (same person lowering face)
+            if (hasConfirmedIdentity && similarity > 50 && !isUnknownIdentity(personName) && !personName.equals(confirmedIdentity)) {
+                log.info("🔄 IDENTITY RESET: Track at ({}, {}) had confirmed identity '{}' but detected different person '{}' (similarity: {}). Resetting identity.",
+                    lastRect.x(), lastRect.y(), confirmedIdentity, personName, similarity);
+                track.resetTrack(null, currentTime);
+                // Continue to normal matching logic without the confirmed identity advantage
+                hasConfirmedIdentity = false;
+                confirmedIdentity = null;
+                // Reset adaptive threshold to base value
+                adaptiveSimilarityThreshold = TRACKING_SIMILARITY_THRESHOLD;
+            }
 
             if (similarity <= adaptiveSimilarityThreshold) {
-                log.info("✅ MATCHED: Person at ({}, {}) matched to existing track (similarity: {}, distance: {}px, track age: {}ms)",
-                    faceRect.x(), faceRect.y(), similarity, (int)distance, trackDuration);
+                log.info("✅ MATCHED: Person at ({}, {}) matched to existing track (similarity: {}, distance: {}px, track age: {}ms, confirmedIdentity: {})",
+                    faceRect.x(), faceRect.y(), similarity, (int)distance, trackDuration, confirmedIdentity);
                 return track;
             } else {
                 log.debug("❌ Similarity too high: {} > {} - faces too different", similarity, adaptiveSimilarityThreshold);
@@ -569,6 +629,15 @@ public class PeopleTrackingService {
         String determinedIdentity = identityResult.getPersonName();
         int identityFrameCount = identityResult.getFrameCount();
 
+        // Use confirmed identity if available and valid, otherwise use computed identity
+        String confirmedIdentity = track.getConfirmedIdentity();
+        if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)) {
+            log.debug("Using confirmed identity '{}' instead of computed '{}' for finalization",
+                confirmedIdentity, determinedIdentity);
+            determinedIdentity = confirmedIdentity;
+            identityFrameCount = frameCount; // Use all frames since identity is confirmed
+        }
+
         log.info("Camera '{}': Person tracking completed ({}) after {} frames over {}ms, moved {}px, determined identity: '{}', best score: {}",
             cameraName, completionReason, frameCount, trackingDuration, (int) distanceMoved, determinedIdentity,
             String.format("%.2f", track.getBestDistance()));
@@ -584,8 +653,16 @@ public class PeopleTrackingService {
         sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople,
             identityFrameCount, frameCount, allFrameImages);
 
-        cameraTrackedPeople.remove(track);
-        track.cleanup();
+        // Reset track instead of removing it - preserve identity for quick re-identification
+        long resetTimestamp = System.currentTimeMillis();
+        track.resetTrack(determinedIdentity, resetTimestamp);
+
+        // Reschedule timeout notification for the continued track
+        scheduleTimeoutNotification(track, cameraName, cameraTrackedPeople);
+
+        log.info("Camera '{}': Track continued for '{}' after finalization - ready for re-identification",
+            cameraName, determinedIdentity);
+
         return new TrackingResult(true, determinedIdentity, bestFaceHash, bestScore, bestImageBytes, bestAllPeople, identityFrameCount);
     }
 
@@ -662,7 +739,7 @@ public class PeopleTrackingService {
      */
     @Data
     private static class TrackedPerson {
-        private final long firstSeen;
+        private long firstSeen;
         private long lastSeen;
         private final List<FaceObservation> observations = new ArrayList<>();
         private final List<byte[]> gifFrames = new ArrayList<>();
@@ -670,6 +747,7 @@ public class PeopleTrackingService {
         private FaceObservation bestObservation; // Track the best scoring observation
         private byte[] bestImageBytes;
         private ScheduledFuture<?> pendingNotification; // Timeout notification future
+        private String confirmedIdentity; // Persisted identity across track resets
 
         public TrackedPerson(
                 Rect initialRect,
@@ -703,6 +781,53 @@ public class PeopleTrackingService {
             boolean isKnown = !isUnknownIdentity(personName);
             log.debug("🆕 TRACKING STARTED: Frame 1, Identity='{}', Type={}, Distance={}",
                 personName, isKnown ? "KNOWN" : "UNKNOWN", String.format("%.2f", distanceScore));
+        }
+
+        /**
+         * Reset the track after finalization while preserving confirmed identity.
+         * This allows the same person to be quickly re-identified in subsequent frames
+         * without losing tracking state.
+         *
+         * @param identity The confirmed identity to preserve
+         * @param resetTimestamp The timestamp to use as the new firstSeen
+         */
+        public void resetTrack(String identity, long resetTimestamp) {
+            // Store confirmed identity before clearing
+            this.confirmedIdentity = identity;
+
+            // Clear old observations (keep last 2 for position matching)
+            int keepCount = Math.min(2, observations.size());
+            if (keepCount > 0) {
+                List<FaceObservation> recentObservations = new ArrayList<>(
+                    observations.subList(observations.size() - keepCount, observations.size())
+                );
+                observations.clear();
+                observations.addAll(recentObservations);
+            } else {
+                observations.clear();
+            }
+
+            // Clear gif frames (old ones are already used in the generated GIF)
+            gifFrames.clear();
+
+            // Reset timing
+            this.firstSeen = resetTimestamp;
+            this.lastSeen = resetTimestamp;
+
+            // Reset best observation to null (will be set by next observation)
+            this.bestObservation = null;
+            this.bestImageBytes = null;
+
+            log.info("🔄 TRACK RESET: Identity='{}' preserved, observations cleared to {}, gif frames cleared",
+                identity, observations.size());
+        }
+
+        /**
+         * Get the confirmed identity if this track was previously finalized.
+         * @return The confirmed identity, or null if not yet finalized
+         */
+        public String getConfirmedIdentity() {
+            return confirmedIdentity;
         }
 
         public void addObservation(
