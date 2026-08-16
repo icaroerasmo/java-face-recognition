@@ -1,6 +1,8 @@
 # RTSP Face Recognition Knowledge Base
 
-This document is the operational knowledge base for **rtsp-face-recognition**. It describes the application architecture, runtime configuration, troubleshooting tips, and the release and deployment workflow used by this repository and the Frigate stack.
+This document is the operational knowledge base for **rtsp-face-recognition**.
+It describes the application architecture, runtime configuration,
+troubleshooting tips, and release workflow.
 
 ## What the service does
 
@@ -31,7 +33,7 @@ For heavier cameras, the extractor now uses:
 - `grabImage()` instead of generic `grab()`
 - channel-aware `Mat` reconstruction
 
-These changes help reduce stalls on streams such as `garagem1`.
+These changes help reduce stalls on high-load streams.
 
 ### 2. Person detection
 
@@ -96,22 +98,6 @@ The runtime stores:
 - serialized face embeddings in `trained_dataset`
 - folder hashes in `training_metadata`
 
-## Deployment layout
-
-The application source lives in:
-
-`/home/icaroerasmo/RTSP Face Recognition`
-
-The Frigate deployment that runs the published image lives in:
-
-`/run/media/games/frigate`
-
-In the Frigate stack:
-
-- `go2rtc` relays/transcodes RTSP streams
-- `rtsp-face-recognition` consumes those relayed streams
-- `telegram-live` builds the Telegram live layout from the same relayed streams
-
 ## Local development and validation
 
 To build the application locally:
@@ -120,17 +106,6 @@ To build the application locally:
 mvn test
 docker build -t ghcr.io/icaroerasmo/java-face-recognition:local .
 ```
-
-To run the local image in the Frigate stack:
-
-```bash
-cd /run/media/games/frigate
-docker compose -f docker-compose.yaml -f docker-compose.local.yaml up -d --force-recreate rtsp-face-recognition
-```
-
-`docker-compose.local.yaml` overrides the image to:
-
-`ghcr.io/icaroerasmo/java-face-recognition:local`
 
 ## Release workflow
 
@@ -175,72 +150,18 @@ Behavior:
 ## Standard release procedure
 
 1. Ensure the desired code is present locally.
-2. Create a **feature branch from `develop`** (not from main):
-   - `git checkout develop && git checkout -b feature/my-feature`
-3. Implement changes in the feature branch.
-4. Commit and push the feature branch.
-5. Create a **release branch from `develop`** using the required format:
-   - `git checkout develop && git checkout -b release/0.1.8`
-6. Merge the feature branch into the release branch:
-   - `git merge feature/my-feature`
-7. Push the release branch to GitHub:
-   - `git push -u origin release/0.1.8`
-8. Wait for the version-bump workflow (`changes-version.yml`) to update `pom.xml` on that branch.
-   - **Do NOT manually bump versions** - the GitHub Action handles this automatically.
-9. Open a pull request from the release branch to `main`.
-10. Merge the pull request.
-11. Wait for the publish workflow (`publish-image.yml`) to:
-    - create the release tag
-    - publish the versioned image
-    - update `latest`
-    - **Do NOT manually build/push Docker images** - the GitHub Action handles this automatically.
-12. Update the Frigate deployment to use `ghcr.io/icaroerasmo/java-face-recognition:latest`.
-13. Recreate the containers in `/run/media/games/frigate`.
-
-### Important notes
-
-- **Always branch from `develop`**, not from `main`. The `develop` branch contains the latest development work.
-- **Version bumps are automated** via `.github/workflows/changes-version.yml`. When you create a branch matching `release/*`, the workflow extracts the version from the branch name and updates `pom.xml`.
-- **Docker image builds are automated** via `.github/workflows/publish-image.yml`. When a PR is merged to `main`, the workflow builds and pushes both the versioned and `latest` tags to GHCR.
-- **For local testing**, use the `:local` tag with `docker-compose.local.yaml` override.
-
-## Production deployment in Frigate
-
-The production compose file is:
-
-`/run/media/games/frigate/docker-compose.yaml`
-
-After a successful release:
-
-1. make sure `rtsp-face-recognition` points to `ghcr.io/icaroerasmo/java-face-recognition:latest`
-2. recreate the stack containers
-
-Example:
-
-```bash
-cd /run/media/games/frigate
-docker compose up -d --force-recreate
-```
+2. Create a release branch **from `develop`** using the required format, for example:
+   - `release/0.1.6`
+3. Push that branch to GitHub.
+4. Wait for the version-bump workflow to update `pom.xml` on that branch.
+5. Open a pull request from the release branch to `main`.
+6. Merge the pull request.
+7. Wait for the publish workflow to:
+   - create the release tag
+   - publish the versioned image
+   - update `latest`
 
 ## Troubleshooting
-
-### `garagem1` freezes or repeats the same frame
-
-Symptoms:
-
-- identical snapshots across multiple seconds
-- repeated-frame watchdog resets in `telegram-live`
-- stale detections in face recognition
-
-Likely cause:
-
-- unstable upstream camera/go2rtc relay rather than application crash
-
-First response:
-
-1. restart `go2rtc`
-2. restart `rtsp-face-recognition`
-3. restart `telegram-live`
 
 ### Person detector sees cars as people
 
@@ -257,7 +178,7 @@ Tradeoff:
 
 Check:
 
-- `go2rtc` stream health
+- upstream RTSP stream health
 - frame freshness
 - person-detection logs
 - training data availability
@@ -265,10 +186,10 @@ Check:
 
 ### Heavy camera behavior
 
-For heavier cameras like `garagem1`, prefer:
+For heavier cameras, prefer:
 
 - lower effective FPS
 - short queues
 - stable RTSP transport
 - enough probe/analyze time for consumers
-- `go2rtc` transcoding to a predictable H.264 output when the source is less stable
+- transcoding to a predictable H.264 output when the source is less stable

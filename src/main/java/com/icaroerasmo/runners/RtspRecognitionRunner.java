@@ -32,7 +32,6 @@ import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 import static com.icaroerasmo.utils.Constants.DESIRED_SCORE;
-import static com.icaroerasmo.utils.FaceHashUtils.computePerceptualHash;
 
 
 @Log4j2
@@ -197,6 +196,16 @@ public class RtspRecognitionRunner {
                             return; // Don't continue processing if no faces detected
                         }
 
+                    // Filter out faces with score > DESIRED_SCORE
+                    faces = faces.stream()
+                            .filter(face -> face.getDistance() <= DESIRED_SCORE)
+                            .collect(Collectors.toList());
+
+                    if (faces.isEmpty()) {
+                        log.debug("All detected faces in frame from camera '{}' have score > {}, skipping frame", cameraName, DESIRED_SCORE);
+                        return;
+                    }
+
                     // Collect detected names with their distance scores
                     Map<String, Double> detectedPeopleWithScores = faces.stream()
                             .collect(Collectors.toMap(
@@ -211,7 +220,7 @@ public class RtspRecognitionRunner {
                             .min()
                             .orElse(DESIRED_SCORE);
 
-                    // FaceRecognitionService already applies its size-adaptive rejection threshold.
+                    // Send notification for ALL detections with score <= DESIRED_SCORE (recognized or Unknown)
                     String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
                     log.info("Pessoas detectadas em '{}': {} (lowest distance: {})",
                             cameraName, namesStr, String.format("%.2f", lowestDistance));
@@ -228,52 +237,33 @@ public class RtspRecognitionRunner {
                             buf.deallocate();
                             jpgExt.deallocate();
 
-                            // Keep annotations and tracking geometry based on full person detections.
-                            // Face rectangles vary sharply as people turn or approach the camera.
-                            List<PeopleTrackingService.PersonDetection> allPeopleDetections = detectedPeople.stream()
-                                .map(personRect -> new PeopleTrackingService.PersonDetection(
-                                    findIdentityForPerson(personRect, faces),
-                                    personRect
-                                ))
+                            // Create PersonDetection list with detected names and rectangles
+                            // Each frame's recognition results are preserved for tracking
+                            List<PeopleTrackingService.PersonDetection> allPeopleDetections = faces.stream()
+                                .filter(face -> face.getFaceRect() != null)
+                                .map(face -> new PeopleTrackingService.PersonDetection(face.getPersonName(), face.getFaceRect()))
                                 .collect(Collectors.toList());
 
-                            // Track each detected face using its enclosing person's geometry.
-                            List<FaceRecognition.DetectedFaces> orderedFaces = faces.stream()
-                                .sorted(java.util.Comparator.comparingDouble(FaceRecognition.DetectedFaces::getDistance))
-                                .toList();
-                            List<Rect> trackedPersonRects = new ArrayList<>();
+                            // Track EACH detected face individually
+                            for (int faceIdx = 0; faceIdx < faces.size(); faceIdx++) {
+                                FaceRecognition.DetectedFaces face = faces.get(faceIdx);
 
-                            for (int faceIdx = 0; faceIdx < orderedFaces.size(); faceIdx++) {
-                                FaceRecognition.DetectedFaces face = orderedFaces.get(faceIdx);
-
-                                Rect trackingRect = findPersonRectForFace(face.getFaceRect(), detectedPeople);
-                                if (trackingRect == null) {
-                                    log.warn("⚠️ SKIPPED: no tracking rectangle for face #{} in camera '{}'", faceIdx + 1, cameraName);
-                                    continue;
-                                }
-                                if (trackedPersonRects.stream().anyMatch(rect -> rect == trackingRect)) {
-                                    log.debug("Skipping additional face associated with an already tracked person rectangle");
-                                    continue;
-                                }
-                                trackedPersonRects.add(trackingRect);
-
-                                // Hash the full person crop in both recognized and no-face frames so
-                                // the visual signature remains comparable across the whole track.
+                                // Extract this face's region for similarity comparison
                                 byte[] faceHash = null;
-                                if (trackingRect != null) {
+                                if (face.getFaceRect() != null) {
                                     org.bytedeco.javacpp.BytePointer faceBuf = null;
                                     org.bytedeco.javacpp.BytePointer jpgExtFace = null;
                                     Mat faceRegion = null;
                                     try {
-                                        faceRegion = new Mat(img, trackingRect);
+                                        // Extract the face region from original image
+                                        faceRegion = new Mat(img, face.getFaceRect());
 
-                                        // Convert the person crop to bytes for visual matching.
+                                        // Convert face to byte array for hashing
                                         faceBuf = new org.bytedeco.javacpp.BytePointer();
                                         jpgExtFace = new org.bytedeco.javacpp.BytePointer(".jpg");
                                         org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtFace, faceRegion, faceBuf);
-                                        byte[] encodedPerson = new byte[(int) faceBuf.limit()];
-                                        faceBuf.get(encodedPerson);
-                                        faceHash = computePerceptualHash(encodedPerson);
+                                        faceHash = new byte[(int) faceBuf.limit()];
+                                        faceBuf.get(faceHash);
                                     } catch (Exception e) {
                                         log.warn("Failed to extract face region {} for camera '{}': {}",
                                             faceIdx + 1, cameraName, e.getMessage());
@@ -291,9 +281,14 @@ public class RtspRecognitionRunner {
                                     faceIdx + 1,
                                     face.getPersonName(),
                                     String.format("%.2f", face.getDistance()),
-                                    (trackingRect != null),
+                                    (face.getFaceRect() != null),
                                     (faceHash != null ? faceHash.length : 0),
                                     (imageBytes != null ? imageBytes.length : 0));
+
+                                if (face.getFaceRect() == null) {
+                                    log.warn("⚠️ SKIPPED: faceRect is null for face #{} in camera '{}'", faceIdx + 1, cameraName);
+                                    continue;
+                                }
 
                                 if (faceHash == null) {
                                     log.warn("⚠️ SKIPPED: faceHash is null for face #{} in camera '{}'", faceIdx + 1, cameraName);
@@ -307,8 +302,8 @@ public class RtspRecognitionRunner {
                                 PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
                                     cameraName,
                                     face.getPersonName(), // This person's name
-                                    trackingRect,         // Stable full-person rectangle
-                                    faceHash,             // Full-person visual hash
+                                    face.getFaceRect(),   // This person's rect
+                                    faceHash,             // This person's hash
                                     face.getDistance(),   // This person's distance
                                     imageBytes,           // Full frame image bytes
                                     allPeopleDetections,  // ALL detected people with names and rectangles for drawing
@@ -476,9 +471,8 @@ public class RtspRecognitionRunner {
                         personBuf = new org.bytedeco.javacpp.BytePointer();
                         jpgExtPerson = new org.bytedeco.javacpp.BytePointer(".jpg");
                         org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtPerson, personRegion, personBuf);
-                        byte[] encodedPerson = new byte[(int) personBuf.limit()];
-                        personBuf.get(encodedPerson);
-                        personHash = computePerceptualHash(encodedPerson);
+                        personHash = new byte[(int) personBuf.limit()];
+                        personBuf.get(personHash);
                     } catch (Exception e) {
                         log.warn("Failed to extract person region {}: {}", i + 1, e.getMessage());
                         continue; // Skip this person
@@ -515,54 +509,6 @@ public class RtspRecognitionRunner {
         } catch (Exception e) {
             log.error("Failed to process unknown people for camera '{}': {}", cameraName, e.getMessage(), e);
         }
-    }
-
-    private String findIdentityForPerson(Rect personRect, List<FaceRecognition.DetectedFaces> faces) {
-        FaceRecognition.DetectedFaces bestFace = null;
-        double bestDistance = Double.MAX_VALUE;
-
-        for (FaceRecognition.DetectedFaces face : faces) {
-            if (face.getFaceRect() == null || !containsCenter(personRect, face.getFaceRect())) {
-                continue;
-            }
-            if (face.getDistance() < bestDistance) {
-                bestFace = face;
-                bestDistance = face.getDistance();
-            }
-        }
-
-        return bestFace != null ? bestFace.getPersonName() : "Unknown";
-    }
-
-    private Rect findPersonRectForFace(Rect faceRect, List<Rect> detectedPeople) {
-        if (faceRect == null) {
-            return null;
-        }
-
-        Rect bestMatch = null;
-        long smallestArea = Long.MAX_VALUE;
-        for (Rect personRect : detectedPeople) {
-            if (!containsCenter(personRect, faceRect)) {
-                continue;
-            }
-
-            long area = (long) personRect.width() * personRect.height();
-            if (area < smallestArea) {
-                bestMatch = personRect;
-                smallestArea = area;
-            }
-        }
-
-        return bestMatch != null ? bestMatch : faceRect;
-    }
-
-    private boolean containsCenter(Rect outerRect, Rect innerRect) {
-        int centerX = innerRect.x() + innerRect.width() / 2;
-        int centerY = innerRect.y() + innerRect.height() / 2;
-        return centerX >= outerRect.x()
-            && centerX <= outerRect.x() + outerRect.width()
-            && centerY >= outerRect.y()
-            && centerY <= outerRect.y() + outerRect.height();
     }
 
     @NotNull
