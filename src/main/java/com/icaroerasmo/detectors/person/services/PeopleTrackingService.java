@@ -140,6 +140,15 @@ public class PeopleTrackingService {
                 String determinedIdentity = identityResult.getPersonName();
                 int identityFrameCount = identityResult.getFrameCount();
 
+                // Use confirmed identity if available and valid, otherwise use computed identity
+                String confirmedIdentity = track.getConfirmedIdentity();
+                if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)) {
+                    log.debug("Using confirmed identity '{}' instead of computed '{}' for timeout notification",
+                        confirmedIdentity, determinedIdentity);
+                    determinedIdentity = confirmedIdentity;
+                    identityFrameCount = frameCount; // Use all frames since identity is confirmed
+                }
+
                 log.info("⏰ TIMEOUT NOTIFICATION: Camera '{}' - Person '{}' disappeared after {} frames over {}ms (moved {}px) - sending notification",
                         cameraName, determinedIdentity, frameCount, trackingDuration, (int)distanceMoved);
 
@@ -619,6 +628,15 @@ public class PeopleTrackingService {
         IdentityResult identityResult = determineIdentity(track, cameraName);
         String determinedIdentity = identityResult.getPersonName();
         int identityFrameCount = identityResult.getFrameCount();
+
+        // Use confirmed identity if available and valid, otherwise use computed identity
+        String confirmedIdentity = track.getConfirmedIdentity();
+        if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)) {
+            log.debug("Using confirmed identity '{}' instead of computed '{}' for finalization",
+                confirmedIdentity, determinedIdentity);
+            determinedIdentity = confirmedIdentity;
+            identityFrameCount = frameCount; // Use all frames since identity is confirmed
+        }
 
         log.info("Camera '{}': Person tracking completed ({}) after {} frames over {}ms, moved {}px, determined identity: '{}', best score: {}",
             cameraName, completionReason, frameCount, trackingDuration, (int) distanceMoved, determinedIdentity,
