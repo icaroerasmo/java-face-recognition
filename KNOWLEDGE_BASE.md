@@ -175,18 +175,34 @@ Behavior:
 ## Standard release procedure
 
 1. Ensure the desired code is present locally.
-2. Create a release branch **from `develop`** using the required format, for example:
-   - `release/0.1.6`
-3. Push that branch to GitHub.
-4. Wait for the version-bump workflow to update `pom.xml` on that branch.
-5. Open a pull request from the release branch to `main`.
-6. Merge the pull request.
-7. Wait for the publish workflow to:
-   - create the release tag
-   - publish the versioned image
-   - update `latest`
-8. Update the Frigate deployment to use `ghcr.io/icaroerasmo/java-face-recognition:latest`.
-9. Recreate the containers in `/run/media/games/frigate`.
+2. Create a **feature branch from `develop`** (not from main):
+   - `git checkout develop && git checkout -b feature/my-feature`
+3. Implement changes in the feature branch.
+4. Commit and push the feature branch.
+5. Create a **release branch from `develop`** using the required format:
+   - `git checkout develop && git checkout -b release/0.1.8`
+6. Merge the feature branch into the release branch:
+   - `git merge feature/my-feature`
+7. Push the release branch to GitHub:
+   - `git push -u origin release/0.1.8`
+8. Wait for the version-bump workflow (`changes-version.yml`) to update `pom.xml` on that branch.
+   - **Do NOT manually bump versions** - the GitHub Action handles this automatically.
+9. Open a pull request from the release branch to `main`.
+10. Merge the pull request.
+11. Wait for the publish workflow (`publish-image.yml`) to:
+    - create the release tag
+    - publish the versioned image
+    - update `latest`
+    - **Do NOT manually build/push Docker images** - the GitHub Action handles this automatically.
+12. Update the Frigate deployment to use `ghcr.io/icaroerasmo/java-face-recognition:latest`.
+13. Recreate the containers in `/run/media/games/frigate`.
+
+### Important notes
+
+- **Always branch from `develop`**, not from `main`. The `develop` branch contains the latest development work.
+- **Version bumps are automated** via `.github/workflows/changes-version.yml`. When you create a branch matching `release/*`, the workflow extracts the version from the branch name and updates `pom.xml`.
+- **Docker image builds are automated** via `.github/workflows/publish-image.yml`. When a PR is merged to `main`, the workflow builds and pushes both the versioned and `latest` tags to GHCR.
+- **For local testing**, use the `:local` tag with `docker-compose.local.yaml` override.
 
 ## Production deployment in Frigate
 
