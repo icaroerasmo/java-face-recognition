@@ -1,5 +1,6 @@
 package com.icaroerasmo.runners;
 
+import com.icaroerasmo.enums.MessagesEnum;
 import com.icaroerasmo.model.FaceRecognition;
 import com.icaroerasmo.properties.CameraProperties;
 import com.icaroerasmo.properties.FaceRecognitionProperties;
@@ -134,9 +135,8 @@ public class RtspRecognitionRunner {
 
                     // Send Telegram notification about reconnection attempt
                     try {
-                        telegramPublisherService.sendTextMessage(
-                            String.format("🔄 Camera '%s': Attempting to reconnect (attempt #%d)...",
-                                cameraName, reconnectAttempt)
+                        telegramPublisherService.sendTranslatedMessage(
+                            MessagesEnum.CAM_RECONNECTING, cameraName, reconnectAttempt
                         );
                     } catch (Exception e) {
                         log.warn("Failed to send reconnection notification to Telegram: {}", e.getMessage());
@@ -146,8 +146,8 @@ public class RtspRecognitionRunner {
                 // Send initial connection notification before starting extraction
                 if (!connectionNotified) {
                     try {
-                        telegramPublisherService.sendTextMessage(
-                            String.format("✅ Camera '%s': Connected successfully and streaming", cameraName)
+                        telegramPublisherService.sendTranslatedMessage(
+                            MessagesEnum.CAM_CONNECTED, cameraName
                         );
                         log.info("Camera '{}': Connection established successfully", cameraName);
                         connectionNotified = true;
@@ -379,9 +379,8 @@ public class RtspRecognitionRunner {
 
                 // Send hibernate notification to Telegram
                 try {
-                    telegramPublisherService.sendTextMessage(
-                        String.format("😴 Camera '%s': Entering hibernate mode for 5 minutes after %d failed connection attempts. Will retry automatically.",
-                            cameraName, HIBERNATE_AFTER_FAILURES)
+                    telegramPublisherService.sendTranslatedMessage(
+                        MessagesEnum.CAM_HIBERNATING, cameraName, HIBERNATE_AFTER_FAILURES
                     );
                 } catch (Exception e) {
                     log.warn("Failed to send hibernate notification to Telegram: {}", e.getMessage());
@@ -398,9 +397,8 @@ public class RtspRecognitionRunner {
 
                 // Send wake-up notification
                 try {
-                    telegramPublisherService.sendTextMessage(
-                        String.format("⏰ Camera '%s': Hibernate complete. Resuming connection attempts...",
-                            cameraName)
+                    telegramPublisherService.sendTranslatedMessage(
+                        MessagesEnum.CAM_HIBERNATE_COMPLETE, cameraName
                     );
                 } catch (Exception e) {
                     log.warn("Failed to send wake-up notification to Telegram: {}", e.getMessage());

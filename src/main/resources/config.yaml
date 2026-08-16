@@ -1,4 +1,5 @@
 face-recognition:
+  locale: 'pt-BR'
   streams:
     processing-fps: 5
     frame-queue-capacity: 2
