@@ -1,6 +1,7 @@
 package com.icaroerasmo.service;
 
 
+import com.icaroerasmo.enums.MessagesEnum;
 import com.icaroerasmo.properties.TelegramProperties;
 import com.pengrad.telegrambot.TelegramBot;
 import com.pengrad.telegrambot.model.request.ParseMode;
@@ -19,8 +20,11 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TelegramPublisherService {
 
+    private static final String APP_TAG = "[Face Recognition] ";
+
     private final TelegramProperties telegramProperties;
     private final TelegramBot telegramBot;
+    private final TranslationService translationService;
 
     /**
      * Sends face detection images to Telegram:
@@ -75,7 +79,8 @@ public class TelegramPublisherService {
      */
     private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
         StringBuilder caption = new StringBuilder();
-        caption.append("<b>Camera: ").append(cameraName).append("</b>\n");
+
+        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_HEADER, cameraName)).append("</b>\n");
 
         // Find and display the lowest distance (best match) from known people only
         double lowestDistance = detectedPeopleWithScores.entrySet().stream()
@@ -83,12 +88,13 @@ public class TelegramPublisherService {
             .mapToDouble(Map.Entry::getValue)
             .min()
             .orElse(100.0);
-        caption.append("<b>Best Match Distance: ").append(String.format("%.2f", lowestDistance)).append("</b>\n");
-        caption.append("<b>Frames Where Person Was Identified: ").append(identityFrameCount).append("</b>\n");
-        caption.append("<b>Total Frames Tracked: ").append(totalTrackedFrames).append("</b>\n\n");
+        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_BEST_MATCH, String.format("%.2f", lowestDistance))).append("</b>\n");
+        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_FRAMES_IDENTIFIED, identityFrameCount)).append("</b>\n");
+        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_FRAMES_TRACKED, totalTrackedFrames)).append("</b>\n\n");
 
         // Count known and unknown people
         int unknownCount = 0;
+        int knownCount = 0;
         StringBuilder knownNames = new StringBuilder();
 
         for (Map.Entry<String, Double> entry : detectedPeopleWithScores.entrySet()) {
@@ -99,29 +105,56 @@ public class TelegramPublisherService {
                 // For Unknown entries, the value is the count of unknown people
                 unknownCount += (int) Math.round(value);
             } else {
+                knownCount++;
                 if (knownNames.length() > 0) knownNames.append(", ");
                 knownNames.append(personName);
             }
         }
 
         caption.append("<b>Detected:</b>\n");
-        if (knownNames.length() > 0) {
-            caption.append("✓ ").append(knownNames.length()).append(" known (").append(knownNames).append(")\n");
+        if (knownCount > 0) {
+            caption.append("✓ ").append(translationService.getMessage(MessagesEnum.DETECTION_KNOWN, knownCount, knownNames.toString())).append("\n");
         }
         if (unknownCount > 0) {
-            caption.append("🔍 ").append(unknownCount).append(" unknown people\n");
+            caption.append("🔍 ").append(translationService.getMessage(MessagesEnum.DETECTION_UNKNOWN, unknownCount)).append("\n");
         }
         if (knownNames.length() == 0 && unknownCount == 0) {
-            caption.append("No people detected\n");
+            caption.append(translationService.getMessage(MessagesEnum.DETECTION_NONE)).append("\n");
         }
 
-        caption.append("\nTime: ").append(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        caption.append("\n").append(translationService.getMessage(MessagesEnum.DETECTION_TIME, java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))));
 
         return caption.toString();
     }
 
     /**
-     * Sends a text message to Telegram (for status notifications)
+     * Sends a translated text message to Telegram (for status notifications)
+     */
+    public void sendTranslatedMessage(MessagesEnum message, Object... params) {
+        try {
+            if (telegramBot == null) {
+                log.error("Telegram bot is not initialized. Cannot send message: {}", message);
+                return;
+            }
+
+            String translated = translationService.getMessage(message, params);
+            String tagged = APP_TAG + translated;
+            SendMessage sendMessage = new SendMessage(telegramProperties.getChatId(), tagged);
+            SendResponse response = telegramBot.execute(sendMessage);
+
+            if (response.isOk()) {
+                log.debug("Successfully sent translated message to Telegram: {}", tagged);
+            } else {
+                log.warn("Failed to send translated message to Telegram: {}", response.description());
+            }
+
+        } catch (Exception e) {
+            log.warn("Error sending translated message to Telegram: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Sends a raw text message to Telegram (for status notifications)
      */
     public void sendTextMessage(String message) {
         try {

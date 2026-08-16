@@ -167,6 +167,13 @@ docker compose -f /run/media/games/frigate/docker-compose.yaml up -d --force-rec
 
 The user must explicitly say the feature works before proceeding to release.
 
+## Version bumping rules
+
+- Patch (0.1.X): Bug fixes, minor improvements
+- Minor (0.X.0): Breaking changes only
+- Major (X.0.0): New features only
+- After .9, minor keeps incrementing (0.1.10, 0.1.11, etc.) - no need to bump to 0.2.0
+
 ## Standard release procedure
 
 1. Ensure the desired code is present locally.
