@@ -70,34 +70,49 @@ public class TelegramPublisherService {
     }
 
     /**
-     * Builds a caption for the Telegram message with detected people information
+     * Builds a caption for the Telegram message with detected people information.
+     * Shows count summary: "✓ 1 known (Icaro), 2 unknown people"
      */
     private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
         StringBuilder caption = new StringBuilder();
         caption.append("<b>Camera: ").append(cameraName).append("</b>\n");
 
-        // Find and display the lowest distance (best match)
-        double lowestDistance = detectedPeopleWithScores.values().stream()
-            .mapToDouble(Double::doubleValue)
+        // Find and display the lowest distance (best match) from known people only
+        double lowestDistance = detectedPeopleWithScores.entrySet().stream()
+            .filter(e -> !"Unknown".equalsIgnoreCase(e.getKey()))
+            .mapToDouble(Map.Entry::getValue)
             .min()
             .orElse(100.0);
         caption.append("<b>Best Match Distance: ").append(String.format("%.2f", lowestDistance)).append("</b>\n");
         caption.append("<b>Frames Where Person Was Identified: ").append(identityFrameCount).append("</b>\n");
         caption.append("<b>Total Frames Tracked: ").append(totalTrackedFrames).append("</b>\n\n");
 
-        caption.append("<b>Detected:</b>\n");
+        // Count known and unknown people
+        int unknownCount = 0;
+        StringBuilder knownNames = new StringBuilder();
 
         for (Map.Entry<String, Double> entry : detectedPeopleWithScores.entrySet()) {
             String personName = entry.getKey();
-            double distance = entry.getValue();
-
-            final String formattedDistance = String.format("%.2f", distance);
+            double value = entry.getValue();
 
             if ("Unknown".equalsIgnoreCase(personName)) {
-                caption.append("🔍 Unknown Person (distance: ").append(formattedDistance).append(")\n");
+                // For Unknown entries, the value is the count of unknown people
+                unknownCount += (int) Math.round(value);
             } else {
-                caption.append("✓ ").append(personName).append(" (distance: ").append(formattedDistance).append(")\n");
+                if (knownNames.length() > 0) knownNames.append(", ");
+                knownNames.append(personName);
             }
+        }
+
+        caption.append("<b>Detected:</b>\n");
+        if (knownNames.length() > 0) {
+            caption.append("✓ ").append(knownNames.length()).append(" known (").append(knownNames).append(")\n");
+        }
+        if (unknownCount > 0) {
+            caption.append("🔍 ").append(unknownCount).append(" unknown people\n");
+        }
+        if (knownNames.length() == 0 && unknownCount == 0) {
+            caption.append("No people detected\n");
         }
 
         caption.append("\nTime: ").append(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
