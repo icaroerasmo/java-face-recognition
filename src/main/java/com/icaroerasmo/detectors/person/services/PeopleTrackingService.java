@@ -159,8 +159,11 @@ public class PeopleTrackingService {
                 List<PersonDetection> bestAllPeople = track.getBestAllPeople();
                 List<byte[]> allFrameImages = track.getAllFrameImages();
 
+                // Build per-person identity map
+                Map<Rect, String> identityMap = buildIdentityMap(bestAllPeople, determinedIdentity, cameraTrackedPeople);
+
                 // Send notification with identity frame count and total tracked frames
-                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages);
+                sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople, identityFrameCount, frameCount, allFrameImages, identityMap);
 
                 // Check if this is a continued track (has confirmed identity from previous finalization)
                 // If so, reset instead of removing to preserve identity for re-identification
@@ -189,10 +192,13 @@ public class PeopleTrackingService {
      * Send notification immediately with cooldown check.
      * Draws rectangles around ALL detected people in the image with their corresponding names before sending.
      * After sending the notification, creates and sends a GIF of all tracked frames.
+     *
+     * @param identityMap Map from Rect to determined identity for per-person labels. If null, falls back to determinedIdentity for all.
      */
     private void sendNotificationNow(String cameraName, String determinedIdentity, double bestScore,
                                      byte[] bestImageBytes, byte[] bestFaceHash, List<PersonDetection> allPeople,
-                                     int identityFrameCount, int totalTrackedFrames, List<byte[]> allFrameImages) {
+                                     int identityFrameCount, int totalTrackedFrames, List<byte[]> allFrameImages,
+                                     Map<Rect, String> identityMap) {
         Mat annotatedImg = null;
         Mat originalImg = null;
         Mat imageBufferMat = null;
@@ -200,17 +206,16 @@ public class PeopleTrackingService {
         BytePointer buf = null;
         BytePointer jpgExt = null;
         try {
-            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}, people count={}, identityFrames={}, totalFrames={}, totalFrameImages={}",
+            log.info("🔔 SENDING NOTIFICATION: camera='{}', identity='{}', score={}, people count={}, identityFrames={}, totalFrames={}, totalFrameImages={}, identityMap={}",
                 cameraName, determinedIdentity, String.format("%.2f", bestScore),
                 allPeople != null ? allPeople.size() : 0, identityFrameCount, totalTrackedFrames,
-                allFrameImages != null ? allFrameImages.size() : 0);
+                allFrameImages != null ? allFrameImages.size() : 0,
+                identityMap != null ? identityMap.size() : 0);
 
             if (bestImageBytes == null || bestImageBytes.length == 0) {
                 log.error("Cannot send notification: image bytes is null or empty");
                 return;
             }
-
-            boolean isUnknown = isUnknownIdentity(determinedIdentity);
 
             // Convert image bytes to Mat so we can draw on it
             imagePointer = new org.bytedeco.javacpp.BytePointer(bestImageBytes);
@@ -228,22 +233,32 @@ public class PeopleTrackingService {
             // Clone the image and draw rectangle on it
             annotatedImg = originalImg.clone();
 
-            // Draw rectangles around ALL detected people using the DETERMINED identity from tracking
-            // Since tracking happens per person, we only draw for the person being tracked
+            // Draw rectangles around ALL detected people with per-person identity labels
             if (allPeople != null && !allPeople.isEmpty()) {
-                // Use the determined identity (the result of tracking, not frame detection)
-                String displayName = determinedIdentity;
-
                 for (PersonDetection person : allPeople) {
                     if (person != null && person.getRect() != null) {
-                        // Draw rectangle with the FINAL determined identity (after tracking)
+                        // Look up per-person identity from identityMap, fall back to person's detection name
+                        String displayName = null;
+                        if (identityMap != null) {
+                            // Find the identity for this rect by matching position
+                            for (Map.Entry<Rect, String> entry : identityMap.entrySet()) {
+                                if (entry.getKey() != null && entry.getKey().equals(person.getRect())) {
+                                    displayName = entry.getValue();
+                                    break;
+                                }
+                            }
+                        }
+                        if (displayName == null) {
+                            displayName = person.getPersonName() != null ? person.getPersonName() : determinedIdentity;
+                        }
+
                         matUtil.drawRectangleAndName(annotatedImg, displayName, person.getRect());
-                        log.debug("Drew rectangle for DETERMINED identity '{}' at ({}, {}, {}, {})",
+                        log.debug("Drew rectangle for identity '{}' at ({}, {}, {}, {})",
                             displayName, person.getRect().x(), person.getRect().y(),
                             person.getRect().width(), person.getRect().height());
                     }
                 }
-                log.info("Drew {} rectangle(s) with determined identity: '{}'", allPeople.size(), displayName);
+                log.info("Drew {} rectangle(s) with per-person identities", allPeople.size());
             }
 
             // Convert annotated image back to bytes
@@ -256,7 +271,8 @@ public class PeopleTrackingService {
             // Compute image hash for detection history
             String imageHash = detectionHistoryService.computeImageHash(annotatedImageBytes);
 
-            // Check if we recently sent this person (using appropriate method)
+            // Use primary identity for cooldown check
+            boolean isUnknown = isUnknownIdentity(determinedIdentity);
             boolean shouldSend = isUnknown
                     ? detectionHistoryService.shouldSendUnknownDetection(imageHash, determinedIdentity, cameraName, bestFaceHash)
                     : detectionHistoryService.shouldSendDetection(imageHash, determinedIdentity, cameraName, bestFaceHash);
@@ -265,14 +281,14 @@ public class PeopleTrackingService {
                 shouldSend, isUnknown, determinedIdentity);
 
             if (shouldSend) {
-                // Create scores map with determined identity and best score
-                Map<String, Double> bestScores = Map.of(determinedIdentity, bestScore);
+                // Build identity summary for caption: count known vs unknown
+                Map<String, Double> identityScores = buildIdentityScoresMap(allPeople, identityMap, determinedIdentity, bestScore);
 
-                log.info("📤 CALLING TELEGRAM API: imageSize={} bytes, identityFrameCount={}, totalTrackedFrames={}",
-                    annotatedImageBytes.length, identityFrameCount, totalTrackedFrames);
+                log.info("📤 CALLING TELEGRAM API: imageSize={} bytes, identityFrameCount={}, totalTrackedFrames={}, identities={}",
+                    annotatedImageBytes.length, identityFrameCount, totalTrackedFrames, identityScores.keySet());
 
                 // Send notification with annotated image (with rectangle) and determined identity
-                telegramPublisherService.publishDetection(annotatedImageBytes, bestScores, cameraName, identityFrameCount, totalTrackedFrames);
+                telegramPublisherService.publishDetection(annotatedImageBytes, identityScores, cameraName, identityFrameCount, totalTrackedFrames);
 
                 log.info("✅ NOTIFICATION SENT SUCCESSFULLY for '{}' (identified in {} frames, tracked across {} total frames)",
                     determinedIdentity, identityFrameCount, totalTrackedFrames);
@@ -285,7 +301,7 @@ public class PeopleTrackingService {
                 // Create and send GIF animation after the main notification
                 // Only create GIF if we have at least 10 frames for meaningful animation
                 if (allFrameImages != null && allFrameImages.size() >= 10) {
-                    log.info("📹 Creating GIF from {} tracked frames for '{}'", allFrameImages.size(), determinedIdentity);
+                    log.info("📹 Creating GIF from {} tracked frames", allFrameImages.size());
 
                     // Create GIF in a separate thread to not block
                     new Thread(() -> {
@@ -295,18 +311,17 @@ public class PeopleTrackingService {
                                 String gifCaption = String.format(
                                     "<b>Tracking Animation</b>\n" +
                                     "<b>Camera:</b> %s\n" +
-                                    "<b>Person:</b> %s\n" +
                                     "<b>Frames:</b> %d\n" +
                                     "<b>Duration:</b> ~%.1f seconds",
-                                    cameraName, determinedIdentity, allFrameImages.size(),
+                                    cameraName, allFrameImages.size(),
                                     allFrameImages.size() / (double) gifCreationService.getGifFps()
                                 );
                                 telegramPublisherService.sendAnimation(gifBytes, gifCaption, cameraName);
                             } else {
-                                log.warn("Failed to create GIF for '{}' - no bytes generated", determinedIdentity);
+                                log.warn("Failed to create GIF - no bytes generated");
                             }
                         } catch (Exception e) {
-                            log.error("Error creating/sending GIF for '{}': {}", determinedIdentity, e.getMessage(), e);
+                            log.error("Error creating/sending GIF: {}", e.getMessage(), e);
                         }
                     }, "GIF-Creator-" + cameraName).start();
                 } else {
@@ -339,6 +354,56 @@ public class PeopleTrackingService {
                 matUtil.releaseResources(annotatedImg);
             }
         }
+    }
+
+    /**
+     * Overload for backward compatibility (single identity for all people).
+     */
+    private void sendNotificationNow(String cameraName, String determinedIdentity, double bestScore,
+                                     byte[] bestImageBytes, byte[] bestFaceHash, List<PersonDetection> allPeople,
+                                     int identityFrameCount, int totalTrackedFrames, List<byte[]> allFrameImages) {
+        sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash,
+            allPeople, identityFrameCount, totalTrackedFrames, allFrameImages, null);
+    }
+
+    /**
+     * Build a map of identity → best distance score for the caption.
+     * Counts known and unknown people separately.
+     */
+    private Map<String, Double> buildIdentityScoresMap(List<PersonDetection> allPeople, Map<Rect, String> identityMap,
+                                                       String determinedIdentity, double bestScore) {
+        java.util.LinkedHashMap<String, Double> scores = new java.util.LinkedHashMap<>();
+
+        if (identityMap != null && allPeople != null) {
+            // Count identities from the identityMap
+            int unknownCount = 0;
+            java.util.LinkedHashMap<String, Double> knownIdentities = new java.util.LinkedHashMap<>();
+
+            for (PersonDetection person : allPeople) {
+                if (person == null || person.getRect() == null) continue;
+                String identity = identityMap.get(person.getRect());
+                if (identity == null) identity = person.getPersonName();
+                if (identity == null) identity = "Unknown";
+
+                if (isUnknownIdentity(identity)) {
+                    unknownCount++;
+                } else {
+                    knownIdentities.putIfAbsent(identity, bestScore);
+                }
+            }
+
+            // Add known identities first
+            scores.putAll(knownIdentities);
+            // Add unknown count
+            if (unknownCount > 0) {
+                scores.put("Unknown", (double) unknownCount);
+            }
+        } else {
+            // Fallback: single identity
+            scores.put(determinedIdentity, bestScore);
+        }
+
+        return scores;
     }
 
     /**
@@ -650,8 +715,11 @@ public class PeopleTrackingService {
         List<PersonDetection> bestAllPeople = track.getBestAllPeople();
         List<byte[]> allFrameImages = track.getAllFrameImages();
 
+        // Build per-person identity map from allPeople detections
+        Map<Rect, String> identityMap = buildIdentityMap(bestAllPeople, determinedIdentity, cameraTrackedPeople);
+
         sendNotificationNow(cameraName, determinedIdentity, bestScore, bestImageBytes, bestFaceHash, bestAllPeople,
-            identityFrameCount, frameCount, allFrameImages);
+            identityFrameCount, frameCount, allFrameImages, identityMap);
 
         // Reset track instead of removing it - preserve identity for quick re-identification
         long resetTimestamp = System.currentTimeMillis();
@@ -732,6 +800,57 @@ public class PeopleTrackingService {
             });
         });
         log.debug("Cleaned up old people tracks");
+    }
+
+    /**
+     * Build a per-person identity map from allPeople detections.
+     * Matches each detected person rect to the best matching tracked identity.
+     * Falls back to the detection name or determinedIdentity for unmatched people.
+     */
+    private Map<Rect, String> buildIdentityMap(List<PersonDetection> allPeople, String determinedIdentity,
+                                               List<TrackedPerson> cameraTrackedPeople) {
+        if (allPeople == null || allPeople.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<Rect, String> identityMap = new java.util.LinkedHashMap<>();
+
+        for (PersonDetection person : allPeople) {
+            if (person == null || person.getRect() == null) continue;
+
+            String identity = null;
+
+            // Try to find the best matching tracked person for this rect
+            if (cameraTrackedPeople != null) {
+                for (TrackedPerson track : cameraTrackedPeople) {
+                    Rect trackRect = track.getLatestRect();
+                    if (trackRect == null) continue;
+
+                    double dist = calculateDistance(person.getRect(), trackRect);
+                    if (dist < MAX_POSITION_DISTANCE) {
+                        // Found a tracked person near this detection
+                        String trackIdentity = track.getConfirmedIdentity();
+                        if (trackIdentity == null) {
+                            IdentityResult idResult = determineIdentity(track, null);
+                            trackIdentity = idResult.getPersonName();
+                        }
+                        if (trackIdentity != null) {
+                            identity = trackIdentity;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Fall back to the detection's own name
+            if (identity == null) {
+                identity = person.getPersonName() != null ? person.getPersonName() : determinedIdentity;
+            }
+
+            identityMap.put(person.getRect(), identity);
+        }
+
+        return identityMap;
     }
 
     /**
