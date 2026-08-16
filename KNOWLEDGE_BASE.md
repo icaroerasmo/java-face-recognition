@@ -147,13 +147,33 @@ Behavior:
    - `ghcr.io/icaroerasmo/java-face-recognition:<version>`
    - `ghcr.io/icaroerasmo/java-face-recognition:latest`
 
+## CRITICAL: Testing before release
+
+**NEVER create a release or push to production without explicit user approval.**
+
+Before any release, always:
+1. Build a local Docker image with `:local` tag
+2. Deploy it locally for the user to test
+3. Wait for the user to confirm it works
+4. Only THEN create the release branch and PR
+
+```bash
+# Build local image
+docker build -t java-face-recognition:local .
+
+# Deploy locally for testing (update docker-compose.yaml to use :local tag temporarily)
+docker compose -f /run/media/games/frigate/docker-compose.yaml up -d --force-recreate rtsp-face-recognition
+```
+
+The user must explicitly say the feature works before proceeding to release.
+
 ## Standard release procedure
 
 1. Ensure the desired code is present locally.
 2. Create a release branch **from `develop`** using the required format, for example:
    - `release/0.1.6`
 3. Push that branch to GitHub.
-4. Wait for the version-bump workflow to update `pom.xml` on that branch.
+4. **Wait for the version-bump workflow to complete** before merging the PR.
 5. Open a pull request from the release branch to `main`.
 6. Merge the pull request.
 7. Wait for the publish workflow to:
