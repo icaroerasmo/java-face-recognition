@@ -1,10 +1,8 @@
 package com.icaroerasmo.detectors.person.services;
 
-import com.icaroerasmo.enums.MessagesEnum;
 import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.service.GifCreationService;
 import com.icaroerasmo.service.TelegramPublisherService;
-import com.icaroerasmo.service.TranslationService;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -42,7 +40,6 @@ public class PeopleTrackingService {
     private final MatUtil matUtil;
     private final GifCreationService gifCreationService;
     private final StreamsProperties streamsProperties;
-    private final TranslationService translationService;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
 
     // Track people per camera
@@ -55,14 +52,12 @@ public class PeopleTrackingService {
                                DetectionHistoryService detectionHistoryService,
                                MatUtil matUtil,
                                GifCreationService gifCreationService,
-                               StreamsProperties streamsProperties,
-                               TranslationService translationService) {
+                               StreamsProperties streamsProperties) {
         this.telegramPublisherService = telegramPublisherService;
         this.detectionHistoryService = detectionHistoryService;
         this.matUtil = matUtil;
         this.gifCreationService = gifCreationService;
         this.streamsProperties = streamsProperties;
-        this.translationService = translationService;
     }
 
     @PreDestroy
@@ -314,17 +309,7 @@ public class PeopleTrackingService {
                             byte[] gifBytes = gifCreationService.createGif(allFrameImages);
                             if (gifBytes != null && gifBytes.length > 0) {
                                 double duration = allFrameImages.size() / (double) gifCreationService.getGifFps();
-                                String gifCaption = String.format(
-                                    "<b>%s</b>\n" +
-                                    "<b>%s</b>\n" +
-                                    "<b>%s</b>\n" +
-                                    "<b>%s</b>",
-                                    translationService.getMessage(MessagesEnum.GIF_HEADER),
-                                    translationService.getMessage(MessagesEnum.GIF_CAMERA, cameraName),
-                                    translationService.getMessage(MessagesEnum.GIF_FRAMES, allFrameImages.size()),
-                                    translationService.getMessage(MessagesEnum.GIF_DURATION, String.format("%.1f", duration))
-                                );
-                                telegramPublisherService.sendAnimation(gifBytes, gifCaption, cameraName);
+                                telegramPublisherService.sendAnimation(gifBytes, cameraName, allFrameImages.size(), duration);
                             } else {
                                 log.warn("Failed to create GIF - no bytes generated");
                             }
