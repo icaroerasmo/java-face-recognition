@@ -36,20 +36,22 @@ public class NotificationPublisher {
                 null,
                 null,
                 null,
+                null,
                 false);
 
         log.debug("Publishing TEXT notification: template={}, args={}", template.name(), stringArgs);
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
     }
 
-    public void publishPhoto(String rawHtml, byte[] payload) {
+    public void publishPhoto(NotificationMessage.CaptionSpec caption, byte[] payload) {
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
                 SENDER,
                 MediaType.PHOTO,
                 null,
                 null,
-                rawHtml,
+                null,
+                caption,
                 null,
                 payload,
                 false);
@@ -58,14 +60,15 @@ public class NotificationPublisher {
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
     }
 
-    public void publishAnimation(String rawHtml, byte[] payload) {
+    public void publishAnimation(NotificationMessage.CaptionSpec caption, byte[] payload) {
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
                 SENDER,
                 MediaType.ANIMATION,
                 null,
                 null,
-                rawHtml,
+                null,
+                caption,
                 null,
                 payload,
                 false);

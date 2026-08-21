@@ -1,6 +1,7 @@
 package com.icaroerasmo.service;
 
 import com.icaroerasmo.enums.MessagesEnum;
+import com.icaroerasmo.messaging.NotificationMessage;
 import com.icaroerasmo.messaging.NotificationPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
@@ -14,12 +15,10 @@ import java.util.Map;
 public class TelegramPublisherService {
 
     private final NotificationPublisher publisher;
-    private final TranslationService translationService;
 
     /**
-     * Publishes face detection images via RabbitMQ:
-     * - Recognized people: Image with person's name in caption
-     * - Unknown people: Image with "Unknown Person" in caption
+     * Publishes face detection images via RabbitMQ.
+     * Sends raw data (detected people + camera info) so the notifier can build the message.
      */
     public void publishDetection(byte[] imageBytes, Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
 
@@ -32,72 +31,17 @@ public class TelegramPublisherService {
                 throw new RuntimeException("Image bytes is null or empty");
             }
 
-            // Build caption with detected people info
-            String caption = buildCaption(detectedPeopleWithScores, cameraName, identityFrameCount, totalTrackedFrames);
-
             log.info("Publishing detection photo to RabbitMQ for camera '{}'", cameraName);
 
-            // Publish image to RabbitMQ
-            publisher.publishPhoto(caption, imageBytes);
+            // Publish raw data so the notifier can build the caption
+            NotificationMessage.CaptionSpec captionSpec = new NotificationMessage.CaptionSpec(
+                    cameraName, detectedPeopleWithScores, identityFrameCount, totalTrackedFrames, null, null);
+            publisher.publishPhoto(captionSpec, imageBytes);
 
         } catch (Exception e) {
             log.error("❌ Failed to publish detection to RabbitMQ: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to publish detection to RabbitMQ", e);
         }
-    }
-
-    /**
-     * Builds a caption for the notification message with detected people information.
-     * Shows count summary: "✓ 1 known (Icaro), 2 unknown people"
-     */
-    private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
-        StringBuilder caption = new StringBuilder();
-
-        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_HEADER, cameraName)).append("</b>\n");
-
-        // Find and display the lowest distance (best match) from known people only
-        double lowestDistance = detectedPeopleWithScores.entrySet().stream()
-            .filter(e -> !"Unknown".equalsIgnoreCase(e.getKey()))
-            .mapToDouble(Map.Entry::getValue)
-            .min()
-            .orElse(100.0);
-        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_BEST_MATCH, String.format("%.2f", lowestDistance))).append("</b>\n");
-        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_FRAMES_IDENTIFIED, identityFrameCount)).append("</b>\n");
-        caption.append("<b>").append(translationService.getMessage(MessagesEnum.DETECTION_FRAMES_TRACKED, totalTrackedFrames)).append("</b>\n\n");
-
-        // Count known and unknown people
-        int unknownCount = 0;
-        int knownCount = 0;
-        StringBuilder knownNames = new StringBuilder();
-
-        for (Map.Entry<String, Double> entry : detectedPeopleWithScores.entrySet()) {
-            String personName = entry.getKey();
-            double value = entry.getValue();
-
-            if ("Unknown".equalsIgnoreCase(personName)) {
-                // For Unknown entries, the value is the count of unknown people
-                unknownCount += (int) Math.round(value);
-            } else {
-                knownCount++;
-                if (knownNames.length() > 0) knownNames.append(", ");
-                knownNames.append(personName);
-            }
-        }
-
-        caption.append("<b>Detected:</b>\n");
-        if (knownCount > 0) {
-            caption.append("✓ ").append(translationService.getMessage(MessagesEnum.DETECTION_KNOWN, knownCount, knownNames.toString())).append("\n");
-        }
-        if (unknownCount > 0) {
-            caption.append("🔍 ").append(translationService.getMessage(MessagesEnum.DETECTION_UNKNOWN, unknownCount)).append("\n");
-        }
-        if (knownNames.length() == 0 && unknownCount == 0) {
-            caption.append(translationService.getMessage(MessagesEnum.DETECTION_NONE)).append("\n");
-        }
-
-        caption.append("\n").append(translationService.getMessage(MessagesEnum.DETECTION_TIME, java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))));
-
-        return caption.toString();
     }
 
     /**
@@ -116,17 +60,19 @@ public class TelegramPublisherService {
     /**
      * Publishes a GIF animation via RabbitMQ
      */
-    public void sendAnimation(byte[] gifBytes, String caption, String cameraName) {
+    public void sendAnimation(byte[] gifBytes, String cameraName, int frameCount, double duration) {
         try {
             if (gifBytes == null || gifBytes.length == 0) {
                 log.error("Cannot send animation: GIF bytes is null or empty");
                 return;
             }
 
-            log.info("Publishing GIF animation to RabbitMQ: size={} bytes, caption={}",
-                gifBytes.length, caption);
+            log.info("Publishing GIF animation to RabbitMQ: size={} bytes, camera={}, frameCount={}, duration={}",
+                gifBytes.length, cameraName, frameCount, duration);
 
-            publisher.publishAnimation(caption, gifBytes);
+            NotificationMessage.CaptionSpec captionSpec = new NotificationMessage.CaptionSpec(
+                    cameraName, null, null, null, frameCount, duration);
+            publisher.publishAnimation(captionSpec, gifBytes);
 
         } catch (Exception e) {
             log.error("❌ Failed to publish GIF animation to RabbitMQ: {}", e.getMessage(), e);
