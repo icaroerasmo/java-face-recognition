@@ -1,14 +1,7 @@
 package com.icaroerasmo.service;
 
-
 import com.icaroerasmo.enums.MessagesEnum;
-import com.icaroerasmo.properties.TelegramProperties;
-import com.pengrad.telegrambot.TelegramBot;
-import com.pengrad.telegrambot.model.request.ParseMode;
-import com.pengrad.telegrambot.request.SendAnimation;
-import com.pengrad.telegrambot.request.SendMessage;
-import com.pengrad.telegrambot.request.SendPhoto;
-import com.pengrad.telegrambot.response.SendResponse;
+import com.icaroerasmo.messaging.NotificationPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
@@ -20,14 +13,11 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class TelegramPublisherService {
 
-    private static final String APP_TAG = "[Face Recognition] ";
-
-    private final TelegramProperties telegramProperties;
-    private final TelegramBot telegramBot;
+    private final NotificationPublisher publisher;
     private final TranslationService translationService;
 
     /**
-     * Sends face detection images to Telegram:
+     * Publishes face detection images via RabbitMQ:
      * - Recognized people: Image with person's name in caption
      * - Unknown people: Image with "Unknown Person" in caption
      */
@@ -37,11 +27,6 @@ public class TelegramPublisherService {
             log.info("publishDetection called: cameraName={}, imageBytes={}, detectedPeople={}, identityFrameCount={}, totalTrackedFrames={}",
                 cameraName, (imageBytes != null ? imageBytes.length : 0), detectedPeopleWithScores.keySet(), identityFrameCount, totalTrackedFrames);
 
-            if (telegramBot == null) {
-                log.error("FATAL: Telegram bot is not initialized!");
-                throw new RuntimeException("Telegram bot is not initialized");
-            }
-
             if (imageBytes == null || imageBytes.length == 0) {
                 log.error("FATAL: Image bytes is null or empty!");
                 throw new RuntimeException("Image bytes is null or empty");
@@ -50,31 +35,19 @@ public class TelegramPublisherService {
             // Build caption with detected people info
             String caption = buildCaption(detectedPeopleWithScores, cameraName, identityFrameCount, totalTrackedFrames);
 
-            log.info("Sending photo to Telegram: chatId={}, caption={}", telegramProperties.getChatId(), caption);
+            log.info("Publishing detection photo to RabbitMQ for camera '{}'", cameraName);
 
-            // Send image to Telegram
-            SendPhoto sendPhoto = new SendPhoto(telegramProperties.getChatId(), imageBytes)
-                    .caption(caption)
-                    .parseMode(ParseMode.HTML);
-
-            SendResponse response = telegramBot.execute(sendPhoto);
-
-            if (response.isOk()) {
-                log.info("✅ Successfully sent detection image to Telegram for camera '{}'. Caption: {}", cameraName, caption);
-            } else {
-                String errorMsg = "Failed to send image to Telegram: " + response.description() + " (error code: " + response.errorCode() + ")";
-                log.error(errorMsg);
-                throw new RuntimeException(errorMsg);
-            }
+            // Publish image to RabbitMQ
+            publisher.publishPhoto(caption, imageBytes);
 
         } catch (Exception e) {
-            log.error("❌ Failed to publish detection to Telegram: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to publish detection to Telegram", e);
+            log.error("❌ Failed to publish detection to RabbitMQ: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to publish detection to RabbitMQ", e);
         }
     }
 
     /**
-     * Builds a caption for the Telegram message with detected people information.
+     * Builds a caption for the notification message with detected people information.
      * Shows count summary: "✓ 1 known (Icaro), 2 unknown people"
      */
     private String buildCaption(Map<String, Double> detectedPeopleWithScores, String cameraName, int identityFrameCount, int totalTrackedFrames) {
@@ -128,88 +101,35 @@ public class TelegramPublisherService {
     }
 
     /**
-     * Sends a translated text message to Telegram (for status notifications)
+     * Publishes a translated text message via RabbitMQ (for status notifications).
+     * The template name and arguments are sent so the notifier can render the message.
      */
     public void sendTranslatedMessage(MessagesEnum message, Object... params) {
         try {
-            if (telegramBot == null) {
-                log.error("Telegram bot is not initialized. Cannot send message: {}", message);
-                return;
-            }
-
-            String translated = translationService.getMessage(message, params);
-            String tagged = APP_TAG + translated;
-            SendMessage sendMessage = new SendMessage(telegramProperties.getChatId(), tagged);
-            SendResponse response = telegramBot.execute(sendMessage);
-
-            if (response.isOk()) {
-                log.debug("Successfully sent translated message to Telegram: {}", tagged);
-            } else {
-                log.warn("Failed to send translated message to Telegram: {}", response.description());
-            }
-
+            log.debug("Publishing translated message to RabbitMQ: template={}", message.name());
+            publisher.publishText(message, params);
         } catch (Exception e) {
-            log.warn("Error sending translated message to Telegram: {}", e.getMessage());
+            log.warn("Error publishing translated message to RabbitMQ: {}", e.getMessage());
         }
     }
 
     /**
-     * Sends a raw text message to Telegram (for status notifications)
-     */
-    public void sendTextMessage(String message) {
-        try {
-            if (telegramBot == null) {
-                log.error("Telegram bot is not initialized. Cannot send message: {}", message);
-                return;
-            }
-
-            SendMessage sendMessage = new SendMessage(telegramProperties.getChatId(), message);
-            SendResponse response = telegramBot.execute(sendMessage);
-
-            if (response.isOk()) {
-                log.debug("Successfully sent text message to Telegram: {}", message);
-            } else {
-                log.warn("Failed to send text message to Telegram: {}", response.description());
-            }
-
-        } catch (Exception e) {
-            log.warn("Error sending text message to Telegram: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Sends a GIF animation to Telegram
+     * Publishes a GIF animation via RabbitMQ
      */
     public void sendAnimation(byte[] gifBytes, String caption, String cameraName) {
         try {
-            if (telegramBot == null) {
-                log.error("Telegram bot is not initialized. Cannot send animation");
-                return;
-            }
-
             if (gifBytes == null || gifBytes.length == 0) {
                 log.error("Cannot send animation: GIF bytes is null or empty");
                 return;
             }
 
-            log.info("Sending GIF animation to Telegram: chatId={}, size={} bytes, caption={}",
-                telegramProperties.getChatId(), gifBytes.length, caption);
+            log.info("Publishing GIF animation to RabbitMQ: size={} bytes, caption={}",
+                gifBytes.length, caption);
 
-            SendAnimation sendAnimation = new SendAnimation(telegramProperties.getChatId(), gifBytes)
-                    .caption(caption)
-                    .parseMode(ParseMode.HTML);
-
-            SendResponse response = telegramBot.execute(sendAnimation);
-
-            if (response.isOk()) {
-                log.info("✅ Successfully sent GIF animation to Telegram for camera '{}'", cameraName);
-            } else {
-                log.error("Failed to send GIF to Telegram: {} (error code: {})",
-                    response.description(), response.errorCode());
-            }
+            publisher.publishAnimation(caption, gifBytes);
 
         } catch (Exception e) {
-            log.error("❌ Failed to send GIF animation to Telegram: {}", e.getMessage(), e);
+            log.error("❌ Failed to publish GIF animation to RabbitMQ: {}", e.getMessage(), e);
         }
     }
 }

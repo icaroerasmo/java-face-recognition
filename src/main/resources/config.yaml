@@ -22,11 +22,16 @@ face-recognition:
   detection:
     person-confidence-threshold: 0.8
   telegram:
-    # Bot token from Telegram BotFather - set this in config/config.yaml or environment variable
-    bot-token: "${TELEGRAM_BOT_TOKEN:}"
-    # Telegram chat ID to receive notifications - set this in config/config.yaml or environment variable
-    chat-id: "${TELEGRAM_CHAT_ID:}"
     # Animation FPS for Telegram tracking clips (higher = smoother, larger/heavier files)
     gif-fps: 10
     # Maximum number of frame images retained per tracked person for Telegram clips
     gif-max-frames: 30
+
+spring:
+  rabbitmq:
+    host: '${RABBITMQ_HOST:localhost}'
+    port: ${RABBITMQ_PORT:5672}
+    username: '${RABBITMQ_USERNAME:guest}'
+    password: '${RABBITMQ_PASSWORD:guest}'
+    publisher-confirm-type: correlated
+    publisher-returns: true
