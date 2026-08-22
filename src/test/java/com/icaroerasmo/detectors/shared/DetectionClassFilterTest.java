@@ -6,15 +6,21 @@ import static com.icaroerasmo.detectors.shared.DetectionClassFilter.CAR_CLASS_ID
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.CAT_CLASS_ID;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DOG_CLASS_ID;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.PERSON_CLASS_ID;
+import static com.icaroerasmo.detectors.shared.DetectionClassFilter.POTTED_PLANT_CLASS_ID;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionType.CAR;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionType.NONE;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionType.PERSON;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionType.PET;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.classify;
+import static com.icaroerasmo.detectors.shared.DetectionClassFilter.intersectionOverUnion;
+import static com.icaroerasmo.detectors.shared.DetectionClassFilter.shouldSuppress;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pure tests for the shared COCO class filter used by PersonDetector and PetDetector.
+ * Native-free: no {@code Rect}/{@code Mat} is used.
  */
 class DetectionClassFilterTest {
 
@@ -75,5 +81,85 @@ class DetectionClassFilterTest {
     void personIsNotConfusedWithPetEvenWithPetThresholdZero() {
         // A person must never classify as PET regardless of thresholds.
         assertEquals(PERSON, classify(PERSON_CLASS_ID, 0.9f, 0.5, 0.5, 0.0));
+    }
+
+    // --- Pure IoU / plant-suppression decision helpers -------------------------
+
+    @Test
+    void pottedPlantClassIdIs58() {
+        assertEquals(58, POTTED_PLANT_CLASS_ID);
+    }
+
+    @Test
+    void iuOfIdenticalBoxesIsOne() {
+        assertEquals(1.0, intersectionOverUnion(10, 10, 100, 100, 10, 10, 100, 100), 1e-9);
+    }
+
+    @Test
+    void iuOfDisjointBoxesIsZero() {
+        assertEquals(0.0, intersectionOverUnion(0, 0, 10, 10, 100, 100, 10, 10), 1e-9);
+    }
+
+    @Test
+    void iuOfPartialOverlapIsIntersectionOverUnion() {
+        // a = (0,0,10,10), b = (5,0,10,10): intersection 5x10=50, union 100+100-50=150 -> 1/3
+        assertEquals(1.0 / 3.0, intersectionOverUnion(0, 0, 10, 10, 5, 0, 10, 10), 1e-9);
+    }
+
+    @Test
+    void iuOfEdgeTouchingBoxesIsZero() {
+        // a = (0,0,10,10), b = (10,0,10,10): share an edge only -> ix2(10) <= ix1(10) -> 0
+        assertEquals(0.0, intersectionOverUnion(0, 0, 10, 10, 10, 0, 10, 10), 1e-9);
+    }
+
+    @Test
+    void iuOfCornerTouchingBoxesIsZero() {
+        assertEquals(0.0, intersectionOverUnion(0, 0, 10, 10, 10, 10, 10, 10), 1e-9);
+    }
+
+    @Test
+    void iuOfContainedBoxMatchesExactMath() {
+        // a = (0,0,100,100) area 10000 contains b = (25,25,50,50) area 2500:
+        // intersection 2500, union 10000 -> 0.25
+        assertEquals(0.25, intersectionOverUnion(0, 0, 100, 100, 25, 25, 50, 50), 1e-9);
+    }
+
+    @Test
+    void iuOfZeroAreaBoxIsZero() {
+        assertEquals(0.0, intersectionOverUnion(0, 0, 0, 10, 5, 5, 10, 10), 1e-9);
+    }
+
+    @Test
+    void iuIsSymmetric() {
+        double ab = intersectionOverUnion(0, 0, 10, 10, 5, 5, 10, 10);
+        double ba = intersectionOverUnion(5, 5, 10, 10, 0, 0, 10, 10);
+        assertEquals(ab, ba, 1e-9);
+    }
+
+    @Test
+    void shouldSuppressRequiresStrictlyGreaterThanThreshold() {
+        assertFalse(shouldSuppress(0.35, 0.35)); // exactly at the threshold is NOT suppressed
+        assertTrue(shouldSuppress(0.36, 0.35));
+        assertFalse(shouldSuppress(0.10, 0.35));
+        assertTrue(shouldSuppress(1.0, 0.35));
+    }
+
+    @Test
+    void plantOverlapSuppressesPetDecision() {
+        // Identical dog and plant boxes -> IoU 1.0 > 0.35 -> suppress.
+        double identical = intersectionOverUnion(0, 0, 50, 50, 0, 0, 50, 50);
+        assertTrue(shouldSuppress(identical, 0.35));
+
+        // Disjoint dog and plant boxes -> IoU 0 -> keep.
+        double disjoint = intersectionOverUnion(0, 0, 50, 50, 200, 200, 50, 50);
+        assertFalse(shouldSuppress(disjoint, 0.35));
+
+        // Light overlap (dog 100x100, plant 50x50 centered in it -> IoU 0.25 < 0.35) -> keep.
+        double light = intersectionOverUnion(0, 0, 100, 100, 25, 25, 50, 50);
+        assertFalse(shouldSuppress(light, 0.35));
+
+        // Strong overlap (dog 100x100, plant 90x90 centered in it -> high IoU) -> suppress.
+        double heavy = intersectionOverUnion(0, 0, 100, 100, 5, 5, 90, 90);
+        assertTrue(shouldSuppress(heavy, 0.35));
     }
 }

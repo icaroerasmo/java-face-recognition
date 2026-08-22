@@ -15,16 +15,23 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 
-import static com.icaroerasmo.detectors.shared.DetectionClassFilter.CAT_CLASS_ID;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DOG_CLASS_ID;
+import static com.icaroerasmo.detectors.shared.DetectionClassFilter.POTTED_PLANT_CLASS_ID;
 
 /**
  * Detects pets (COCO {@code dog} = 16 and {@code cat} = 17) using the SAME
  * MobileNet-SSD model as {@code PersonDetector} (see {@link MobileNetSsdDetector}).
  *
+ * <p>Mirroring the car-suppression in {@code PersonDetector}, any dog/cat box whose
+ * IoU with a {@code potted plant} (COCO class 58) box exceeds
+ * {@code plantSuppressionIou} is suppressed - the model occasionally misclassifies a
+ * potted plant as a dog, so an overlapping plant box vetoes the pet detection.
+ *
  * <p>Synchronized per camera because the underlying {@code Net} is shared; every
  * forward pass runs inside {@link com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper#runExclusive}.
- * The returned {@link Rect}s are owned by the caller.
+ * The returned {@link Rect}s are owned by the caller; every non-returned rect
+ * (including plant boxes and suppressed pet boxes) is deallocated exactly once in
+ * the {@code finally} block.
  */
 @Log4j2
 @Service
@@ -32,14 +39,18 @@ public class PetDetector {
 
     private final MobileNetSsdDetector mobileNetSsdDetector;
     private final double petConfidenceThreshold;
+    private final double plantConfidenceThreshold;
+    private final double plantSuppressionIou;
 
     public PetDetector(
             MobileNetSsdDetector mobileNetSsdDetector,
             ObjectDetectionProperties objectDetectionProperties
     ) {
         this.mobileNetSsdDetector = mobileNetSsdDetector;
-        this.petConfidenceThreshold = Math.max(0.0, Math.min(1.0,
-                objectDetectionProperties.getDetection().getPet().getConfidenceThreshold()));
+        var pet = objectDetectionProperties.getDetection().getPet();
+        this.petConfidenceThreshold = clamp01(pet.getConfidenceThreshold());
+        this.plantConfidenceThreshold = clamp01(pet.getPlantConfidenceThreshold());
+        this.plantSuppressionIou = clamp01(pet.getPlantSuppressionIou());
     }
 
     public synchronized List<PetDetection> detect(Mat image) {
@@ -48,19 +59,52 @@ public class PetDetector {
             return List.of();
         }
 
-        List<PetDetection> pets = new ArrayList<>();
+        List<CocoDetection> petCandidates = new ArrayList<>();
+        List<CocoDetection> plants = new ArrayList<>();
         // Rects transferred to the returned list must NOT be released here.
         Set<Rect> returned = Collections.newSetFromMap(new IdentityHashMap<>());
+
         try {
             for (CocoDetection detection : detections) {
                 if (DetectionClassFilter.classify(
                         detection.classId(), detection.confidence(), 0, 0, petConfidenceThreshold)
-                        != DetectionClassFilter.DetectionType.PET) {
-                    continue;
+                        == DetectionClassFilter.DetectionType.PET) {
+                    petCandidates.add(detection);
+                } else if (detection.classId() == POTTED_PLANT_CLASS_ID
+                        && detection.confidence() > plantConfidenceThreshold) {
+                    // Plant boxes are never returned; they only veto pet false positives.
+                    plants.add(detection);
                 }
-                String label = detection.classId() == DOG_CLASS_ID ? "Dog" : "Cat";
-                pets.add(new PetDetection(label, detection.rect()));
-                returned.add(detection.rect());
+            }
+
+            if (petCandidates.isEmpty()) {
+                return List.of();
+            }
+
+            List<PetDetection> pets = new ArrayList<>(petCandidates.size());
+            for (CocoDetection candidate : petCandidates) {
+                Rect petRect = candidate.rect();
+                boolean suppressed = false;
+                for (CocoDetection plant : plants) {
+                    Rect plantRect = plant.rect();
+                    if (DetectionClassFilter.shouldSuppress(
+                            DetectionClassFilter.intersectionOverUnion(
+                                    petRect.x(), petRect.y(), petRect.width(), petRect.height(),
+                                    plantRect.x(), plantRect.y(), plantRect.width(), plantRect.height()),
+                            plantSuppressionIou)) {
+                        suppressed = true;
+                        break;
+                    }
+                }
+                if (suppressed) {
+                    log.debug("Suppressing pet box at ({}, {}) size {}x{} (overlaps potted plant with IoU > {})",
+                            petRect.x(), petRect.y(), petRect.width(), petRect.height(),
+                            String.format("%.2f", plantSuppressionIou));
+                } else {
+                    String label = candidate.classId() == DOG_CLASS_ID ? "Dog" : "Cat";
+                    pets.add(new PetDetection(label, petRect));
+                    returned.add(petRect);
+                }
             }
             return pets;
         } catch (Exception e) {
@@ -77,5 +121,9 @@ public class PetDetector {
                 }
             }
         }
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
     }
 }
