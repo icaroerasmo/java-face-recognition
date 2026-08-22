@@ -1,6 +1,7 @@
 package com.icaroerasmo.runners;
 
 import com.icaroerasmo.enums.MessagesEnum;
+import com.icaroerasmo.messaging.DetectionEventPublisher;
 import com.icaroerasmo.model.FaceRecognition;
 import com.icaroerasmo.properties.CameraProperties;
 import com.icaroerasmo.properties.FaceRecognitionProperties;
@@ -25,6 +26,7 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -51,6 +53,7 @@ public class RtspRecognitionRunner {
     private final FaceRecognitionProperties faceRecognitionProperties;
     private final StreamsProperties streamsProperties;
     private final TrainingProperties trainingProperties;
+    private final DetectionEventPublisher detectionEventPublisher;
 
     public void start(String... args) throws Exception {
 
@@ -110,6 +113,19 @@ public class RtspRecognitionRunner {
 
         // STEP 2: Try to recognize faces in the frame
         return faceRecognitionService.test(currentRecognizer, img);
+    }
+
+    private void publishPresenceEvent(String cameraName, List<FaceRecognition.DetectedFaces> faces) {
+        String primaryName = "Unknown";
+        if (faces != null && !faces.isEmpty()) {
+            FaceRecognition.DetectedFaces best = faces.stream()
+                    .min(Comparator.comparingDouble(FaceRecognition.DetectedFaces::getDistance))
+                    .orElse(null);
+            if (best != null && best.getPersonName() != null && !best.getPersonName().isBlank()) {
+                primaryName = best.getPersonName();
+            }
+        }
+        detectionEventPublisher.publishPresence(cameraName, primaryName);
     }
 
     /**
@@ -188,6 +204,9 @@ public class RtspRecognitionRunner {
 
                         List<FaceRecognition.DetectedFaces> faces =
                                 faceRecognition != null ? faceRecognition.getFaces() : null;
+
+                        // Publish low-latency presence event for the live-stream overlay (debounced)
+                        publishPresenceEvent(cameraName, faces);
 
                         // STEP 3: Check if faces were detected
                         if (faces == null || faces.isEmpty()) {
