@@ -1,12 +1,12 @@
-# RTSP Face Recognition Knowledge Base
+# RTSP Object Detection Knowledge Base
 
-This document is the operational knowledge base for **rtsp-face-recognition**.
+This document is the operational knowledge base for **rtsp-object-detection**.
 It describes the application architecture, runtime configuration,
 troubleshooting tips, and release workflow.
 
 ## What the service does
 
-`rtsp-face-recognition` is a Spring Boot background application that:
+`rtsp-object-detection` is a Spring Boot background application that:
 
 1. Connects to one or more RTSP cameras.
 2. Samples frames through a bounded producer/consumer pipeline.
@@ -40,7 +40,7 @@ These changes help reduce stalls on high-load streams.
 `PersonDetector` runs SSD MobileNet as the first gate.
 
 - only class `person` is kept
-- `face-recognition.detection.person-confidence-threshold` controls the minimum confidence
+- `object-detection.detection.person-confidence-threshold` controls the minimum confidence
 - the current default is `0.8`
 
 Raising this threshold reduces false positives like cars or static objects being treated as people.
@@ -74,12 +74,12 @@ Key settings:
 
 | Key | Purpose |
 | --- | --- |
-| `face-recognition.streams.processing-fps` | Limits per-camera processing rate |
-| `face-recognition.streams.frame-queue-capacity` | Caps buffered decoded frames |
-| `face-recognition.streams.max-consecutive-null-frames` | Reconnect threshold for unstable streams |
-| `face-recognition.detection.person-confidence-threshold` | Minimum confidence for person detections |
-| `face-recognition.acceleration.*` | OpenCV backend and target selection |
-| `face-recognition.telegram.*` | Telegram bot/chat and clip settings |
+| `object-detection.streams.processing-fps` | Limits per-camera processing rate |
+| `object-detection.streams.frame-queue-capacity` | Caps buffered decoded frames |
+| `object-detection.streams.max-consecutive-null-frames` | Reconnect threshold for unstable streams |
+| `object-detection.detection.person-confidence-threshold` | Minimum confidence for person detections |
+| `object-detection.acceleration.*` | OpenCV backend and target selection |
+| `object-detection.telegram.*` | Telegram bot/chat and clip settings |
 
 ## Training data
 
@@ -104,7 +104,7 @@ To build the application locally:
 
 ```bash
 mvn test
-docker build -t ghcr.io/icaroerasmo/java-face-recognition:local .
+docker build -t ghcr.io/icaroerasmo/java-object-detection:local .
 ```
 
 ## Release workflow
@@ -144,8 +144,8 @@ Behavior:
 2. It creates a Git tag named `release/<version>`.
 3. It builds and pushes the Docker image to GHCR.
 4. It publishes two image tags:
-   - `ghcr.io/icaroerasmo/java-face-recognition:<version>`
-   - `ghcr.io/icaroerasmo/java-face-recognition:latest`
+   - `ghcr.io/icaroerasmo/java-object-detection:<version>`
+   - `ghcr.io/icaroerasmo/java-object-detection:latest`
 
 ## CRITICAL: Testing before release
 
@@ -159,7 +159,7 @@ Before any release, always:
 
 ```bash
 # Build local image
-docker build -t java-face-recognition:local .
+docker build -t java-object-detection:local .
 
 # Deploy locally for testing (update docker-compose.yaml to use :local tag temporarily)
 docker compose -f /run/media/games/frigate/docker-compose.yaml up -d --force-recreate rtsp-face-recognition
@@ -194,7 +194,7 @@ The user must explicitly say the feature works before proceeding to release.
 
 Increase:
 
-- `face-recognition.detection.person-confidence-threshold`
+- `object-detection.detection.person-confidence-threshold`
 
 Tradeoff:
 

@@ -58,6 +58,26 @@ public class TelegramPublisherService {
     }
 
     /**
+     * Sends a translated movement-detected text message via RabbitMQ.
+     */
+    public void sendMovementAlert(String cameraName) {
+        sendTranslatedMessage(MessagesEnum.MOVEMENT_DETECTED, cameraName);
+    }
+
+    /**
+     * Sends a PHOTO notification of a detected pet, using the {@code PET_DETECTED}
+     * template as the caption.
+     */
+    public void sendPetPhoto(byte[] jpeg, String cameraName) {
+        if (jpeg == null || jpeg.length == 0) {
+            log.error("Cannot send pet photo: JPEG bytes is null or empty");
+            return;
+        }
+        log.info("Publishing pet photo to RabbitMQ: size={} bytes, camera={}", jpeg.length, cameraName);
+        publisher.publishPhotoWithTemplate(MessagesEnum.PET_DETECTED, new Object[]{cameraName}, jpeg);
+    }
+
+    /**
      * Publishes a GIF animation via RabbitMQ
      */
     public void sendAnimation(byte[] gifBytes, String cameraName, int frameCount, double duration) {

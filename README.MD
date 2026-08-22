@@ -1,6 +1,6 @@
-# RTSP Face Recognition Configuration
+# RTSP Object Detection Configuration
 
-This document describes the application properties supported by **RTSP Face Recognition**.
+This document describes the application properties supported by **RTSP Object Detection**.
 
 For architecture, operations, troubleshooting, and the release/deployment process, see [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md).
 
@@ -11,7 +11,7 @@ All examples below use **placeholder values only**. Do not commit real RTSP URLs
 All settings live under:
 
 ```yaml
-face-recognition:
+object-detection:
   streams:
     processing-fps: 5
     frame-queue-capacity: 2
@@ -36,18 +36,18 @@ face-recognition:
     gif-max-frames: 30
 ```
 
-## `face-recognition.streams`
+## `object-detection.streams`
 
 Controls camera ingestion, frame freshness, and queueing behavior.
 
 | Property | Type | Default | Description |
 |---|---|---:|---|
-| `face-recognition.streams.processing-fps` | integer | `5` | Maximum number of frames per second that the pipeline will process per camera. Lower values reduce latency and memory usage. Higher values can improve temporal smoothness but increase load. |
-| `face-recognition.streams.frame-queue-capacity` | integer | `2` | Number of decoded frames buffered per camera. Small values prefer fresh frames over stale backlog. |
-| `face-recognition.streams.tracking-max-frames` | integer | `30` | Maximum number of captured frames kept in a single tracking session before the track is finalized and evaluated. Lower values cap memory use sooner; higher values keep longer motion context. |
-| `face-recognition.streams.cameras` | list | `[]` | List of camera definitions to ingest. |
+| `object-detection.streams.processing-fps` | integer | `5` | Maximum number of frames per second that the pipeline will process per camera. Lower values reduce latency and memory usage. Higher values can improve temporal smoothness but increase load. |
+| `object-detection.streams.frame-queue-capacity` | integer | `2` | Number of decoded frames buffered per camera. Small values prefer fresh frames over stale backlog. |
+| `object-detection.streams.tracking-max-frames` | integer | `30` | Maximum number of captured frames kept in a single tracking session before the track is finalized and evaluated. Lower values cap memory use sooner; higher values keep longer motion context. |
+| `object-detection.streams.cameras` | list | `[]` | List of camera definitions to ingest. |
 
-### `face-recognition.streams.cameras[]`
+### `object-detection.streams.cameras[]`
 
 Each entry defines one RTSP source.
 
@@ -57,39 +57,39 @@ Each entry defines one RTSP source.
 | `url` | string | none | RTSP URL for the camera stream. Use placeholders in committed files and inject real values at deploy time. |
 | `protocol` | enum | `TCP` | Transport mode for RTSP ingestion. Allowed values: `TCP`, `UDP`. |
 
-## `face-recognition.training`
+## `object-detection.training`
 
 Controls where the application reads the training image folders used to build or refresh the stored face gallery.
 
 | Property | Type | Default | Description |
 |---|---|---:|---|
-| `face-recognition.training.root-folder` | string | `train` | Folder containing the training images used to build or refresh the dataset. |
+| `object-detection.training.root-folder` | string | `train` | Folder containing the training images used to build or refresh the dataset. |
 
 The application persists the generated face-recognition gallery in SQLite; there is no longer a separate configurable dataset file path.
 
-## `face-recognition.acceleration`
+## `object-detection.acceleration`
 
 Controls the OpenCV DNN backend/target selection.
 
 | Property | Type | Default | Description |
 |---|---|---:|---|
-| `face-recognition.acceleration.backend` | enum | `OPENCV` | Backend used by the DNN models. Allowed values: `AUTO`, `OPENCV`. |
-| `face-recognition.acceleration.target` | enum | `CPU` | General fallback target for DNN execution. Allowed values: `AUTO`, `CPU`, `OPENCL`, `OPENCL_FP16`. |
-| `face-recognition.acceleration.face-detection-target` | enum | `OPENCL` | Preferred target for face detection. Allowed values: `AUTO`, `CPU`, `OPENCL`, `OPENCL_FP16`. |
-| `face-recognition.acceleration.person-detection-target` | enum | `CPU` | Preferred target for person detection. Allowed values: `AUTO`, `CPU`, `OPENCL`, `OPENCL_FP16`. |
-| `face-recognition.acceleration.enable-opencl` | boolean | `true` | Enables OpenCL-oriented target selection when supported by the runtime. |
-| `face-recognition.acceleration.fallback-to-cpu` | boolean | `true` | Falls back to CPU if the requested acceleration backend or target cannot be initialized. |
+| `object-detection.acceleration.backend` | enum | `OPENCV` | Backend used by the DNN models. Allowed values: `AUTO`, `OPENCV`. |
+| `object-detection.acceleration.target` | enum | `CPU` | General fallback target for DNN execution. Allowed values: `AUTO`, `CPU`, `OPENCL`, `OPENCL_FP16`. |
+| `object-detection.acceleration.face-detection-target` | enum | `OPENCL` | Preferred target for face detection. Allowed values: `AUTO`, `CPU`, `OPENCL`, `OPENCL_FP16`. |
+| `object-detection.acceleration.person-detection-target` | enum | `CPU` | Preferred target for person detection. Allowed values: `AUTO`, `CPU`, `OPENCL`, `OPENCL_FP16`. |
+| `object-detection.acceleration.enable-opencl` | boolean | `true` | Enables OpenCL-oriented target selection when supported by the runtime. |
+| `object-detection.acceleration.fallback-to-cpu` | boolean | `true` | Falls back to CPU if the requested acceleration backend or target cannot be initialized. |
 
-## `face-recognition.telegram`
+## `object-detection.telegram`
 
 Controls Telegram notification delivery and animation rendering.
 
 | Property | Type | Default | Description |
 |---|---|---:|---|
-| `face-recognition.telegram.bot-token` | string | none | Telegram bot token. Prefer environment-variable injection instead of committing the real token. |
-| `face-recognition.telegram.chat-id` | string | none | Telegram chat ID that receives notifications. Prefer environment-variable injection instead of committing the real value. |
-| `face-recognition.telegram.gif-fps` | integer | `10` | Frame rate used when building Telegram animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
-| `face-recognition.telegram.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for Telegram clips. Lower values reduce RAM and clip-encoding cost. |
+| `object-detection.telegram.bot-token` | string | none | Telegram bot token. Prefer environment-variable injection instead of committing the real token. |
+| `object-detection.telegram.chat-id` | string | none | Telegram chat ID that receives notifications. Prefer environment-variable injection instead of committing the real value. |
+| `object-detection.telegram.gif-fps` | integer | `10` | Frame rate used when building Telegram animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
+| `object-detection.telegram.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for Telegram clips. Lower values reduce RAM and clip-encoding cost. |
 
 ## Security guidance
 

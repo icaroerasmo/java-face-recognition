@@ -1,4 +1,4 @@
-face-recognition:
+object-detection:
   locale: 'pt-BR'
   streams:
     processing-fps: 5
@@ -23,6 +23,21 @@ face-recognition:
     person-confidence-threshold: 0.8
     car-confidence-threshold: 0.5
     max-person-area-ratio: 0.45
+    movement:
+      enabled: true
+      notify-telegram: true
+      difference-threshold: 25
+      min-motion-ratio: 0.01
+      debounce-ms: 5000
+      telegram-throttle-ms: 30000
+      processing-width: 320
+      gaussian-kernel-size: 5
+      dilation-iterations: 2
+    pet:
+      enabled: true
+      confidence-threshold: 0.5
+      debounce-ms: 5000
+      telegram-throttle-ms: 30000
   telegram:
     # Animation FPS for Telegram tracking clips (higher = smoother, larger/heavier files)
     gif-fps: 10

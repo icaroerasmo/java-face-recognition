@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 
 @Data
 @Component
-@ConfigurationProperties(prefix = "face-recognition.telegram")
+@ConfigurationProperties(prefix = "object-detection.telegram")
 public class TelegramProperties {
     // Animation FPS for Telegram MP4/GIF previews
     private int gifFps = 10;

@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Configuration;
 
 @Data
 @Configuration
-@ConfigurationProperties(prefix = "face-recognition")
+@ConfigurationProperties(prefix = "object-detection")
 public class GeneralProperties {
     private String locale = "pt-BR";
 }

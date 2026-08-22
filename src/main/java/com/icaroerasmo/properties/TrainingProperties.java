@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 @Getter
 @Setter
 @Component
-@ConfigurationProperties(prefix = "face-recognition.training")
+@ConfigurationProperties(prefix = "object-detection.training")
 public class TrainingProperties {
     /**
      * Classpath folder that contains the training dataset images.

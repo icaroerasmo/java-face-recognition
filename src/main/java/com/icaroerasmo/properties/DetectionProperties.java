@@ -2,6 +2,7 @@ package com.icaroerasmo.properties;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
 @Getter
 @Setter
@@ -25,4 +26,10 @@ public class DetectionProperties {
      * (e.g. cars misclassified as people).
      */
     private double maxPersonAreaRatio = 0.45;
+
+    @NestedConfigurationProperty
+    private MovementDetectionProperties movement = new MovementDetectionProperties();
+
+    @NestedConfigurationProperty
+    private PetDetectionProperties pet = new PetDetectionProperties();
 }

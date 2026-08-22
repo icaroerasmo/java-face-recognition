@@ -16,7 +16,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class NotificationPublisher {
 
-    private static final String SENDER = "face-recognition";
+    private static final String SENDER = "object-detection";
     private static final String EXCHANGE = "telegram.exchange";
     private static final String ROUTING_KEY = "telegram.notifications";
 
@@ -57,6 +57,32 @@ public class NotificationPublisher {
                 false);
 
         log.debug("Publishing PHOTO notification: payload={} bytes", payload != null ? payload.length : 0);
+        rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
+    }
+
+    /**
+     * Publishes a PHOTO notification rendered from a message template (used as the
+     * caption) plus template arguments. {@code rawHtml} and {@code caption} are null.
+     */
+    public void publishPhotoWithTemplate(MessagesEnum template, Object[] args, byte[] payload) {
+        List<String> stringArgs = args == null
+                ? List.of()
+                : Arrays.stream(args).map(String::valueOf).toList();
+
+        NotificationMessage message = new NotificationMessage(
+                UUID.randomUUID().toString(),
+                SENDER,
+                MediaType.PHOTO,
+                template.name(),
+                stringArgs,
+                null,
+                null,
+                null,
+                payload,
+                false);
+
+        log.debug("Publishing PHOTO notification: template={}, args={}, payload={} bytes",
+                template.name(), stringArgs, payload != null ? payload.length : 0);
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
     }
 
