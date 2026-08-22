@@ -297,11 +297,7 @@ public class PeopleTrackingService {
 
                 // Publish detection event to RabbitMQ for the live-stream overlay
                 try {
-                    MessagesEnum template = isUnknown
-                            ? MessagesEnum.PERSON_DETECTED_UNKNOWN
-                            : MessagesEnum.PERSON_DETECTED_KNOWN;
-                    List<String> args = isUnknown ? List.of() : List.of(determinedIdentity);
-                    detectionEventPublisher.publish(cameraName, template, args);
+                    detectionEventPublisher.publish(cameraName, MessagesEnum.PERSON_DETECTED, List.of());
                 } catch (Exception e) {
                     log.error("Failed to publish detection event for camera '{}': {}", cameraName, e.getMessage());
                 }
