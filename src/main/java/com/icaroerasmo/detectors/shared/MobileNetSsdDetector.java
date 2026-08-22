@@ -30,8 +30,8 @@ import static org.bytedeco.opencv.global.opencv_dnn.readNetFromCaffe;
 import static org.bytedeco.opencv.global.opencv_imgproc.resize;
 
 /**
- * Shared MobileNet-SSD (COCO) detector. Loads {@code opencv/SSD_MobileNet.caffemodel}
- * exactly ONCE and exposes raw detections for all COCO classes. Both
+ * Shared MobileNet-SSD (PASCAL VOC) detector. Loads {@code opencv/SSD_MobileNet.caffemodel}
+ * exactly ONCE and exposes raw detections for all VOC classes. Both
  * {@code PersonDetector} and {@code PetDetector} consume this instance so only a
  * single model copy ever exists in memory.
  *
@@ -93,7 +93,7 @@ public class MobileNetSsdDetector {
     }
 
     /**
-     * Runs the MobileNet-SSD forward pass and returns raw COCO detections with
+     * Runs the MobileNet-SSD forward pass and returns raw PASCAL VOC detections with
      * pixel-scaled rectangles. The returned {@link Rect}s are owned by the caller.
      */
     public List<CocoDetection> detectRaw(Mat image) {

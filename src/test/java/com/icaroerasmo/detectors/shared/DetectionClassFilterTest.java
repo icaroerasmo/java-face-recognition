@@ -87,8 +87,14 @@ class DetectionClassFilterTest {
     // --- Pure IoU / plant-suppression decision helpers -------------------------
 
     @Test
-    void pottedPlantClassIdIs58() {
-        assertEquals(58, POTTED_PLANT_CLASS_ID);
+    void vocClassIdConstantsAreCorrect() {
+        // The shared model is PASCAL VOC (1-indexed, 0 = background): the ids must be
+        // person=15, car=7, dog=12, cat=8, pottedplant=16.
+        assertEquals(15, PERSON_CLASS_ID);
+        assertEquals(7, CAR_CLASS_ID);
+        assertEquals(12, DOG_CLASS_ID);
+        assertEquals(8, CAT_CLASS_ID);
+        assertEquals(16, POTTED_PLANT_CLASS_ID);
     }
 
     @Test

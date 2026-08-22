@@ -21,7 +21,7 @@ import java.util.Set;
  * Service for detecting people using the shared SSD MobileNet model
  * ({@link MobileNetSsdDetector}). Person class 15 detections above the configured
  * confidence are kept; false-positive person boxes are suppressed when they overlap
- * a car (class 7) or a dog/cat (class 16/17 - the model occasionally misclassifies
+ * a car (class 7) or a dog/cat (class 12/8 - the model occasionally misclassifies
  * a dog as person with higher confidence than dog), or when their area exceeds
  * {@code maxPersonAreaRatio}.
  *

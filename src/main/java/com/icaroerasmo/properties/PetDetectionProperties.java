@@ -21,7 +21,7 @@ public class PetDetectionProperties {
     private double confidenceThreshold = 0.3;
 
     /**
-     * Minimum confidence required for a potted-plant detection (COCO class 58).
+     * Minimum confidence required for a potted-plant detection (PASCAL VOC class 16).
      * Plant boxes above this threshold veto overlapping dog/cat false positives.
      */
     private double plantConfidenceThreshold = 0.5;
