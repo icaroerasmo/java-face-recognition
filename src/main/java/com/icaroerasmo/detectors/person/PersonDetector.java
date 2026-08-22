@@ -37,6 +37,12 @@ public class PersonDetector implements IDetector {
     // Class index for "person" in MobileNet-SSD (COCO dataset)
     private static final int PERSON_CLASS_ID = 15;
 
+    // Class index for "car" in MobileNet-SSD (COCO dataset), used to suppress
+    // false positives such as cars being misclassified as people
+    private static final int CAR_CLASS_ID = 7;
+    // IoU threshold above which a person box overlapping a car box is suppressed
+    private static final double CAR_SUPPRESSION_IOU = 0.35;
+
     // Scale factor for MobileNet preprocessing
     private static final double SCALE_FACTOR = 0.007843; // 1/127.5
     // Mean values: 127.5 for each channel (created per use to avoid memory leak)
@@ -45,6 +51,8 @@ public class PersonDetector implements IDetector {
     private final MatUtil matUtil;
     private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
     private final double personConfidenceThreshold;
+    private final double carConfidenceThreshold;
+    private final double maxPersonAreaRatio;
 
     public PersonDetector(
             MatUtil matUtil,
@@ -56,6 +64,10 @@ public class PersonDetector implements IDetector {
         this.personConfidenceThreshold = normalizeConfidenceThreshold(
                 faceRecognitionProperties.getDetection().getPersonConfidenceThreshold()
         );
+        this.carConfidenceThreshold = normalizeConfidenceThreshold(
+                faceRecognitionProperties.getDetection().getCarConfidenceThreshold());
+        this.maxPersonAreaRatio = Math.max(0.0, Math.min(1.0,
+                faceRecognitionProperties.getDetection().getMaxPersonAreaRatio()));
         try {
             String protoPath = OpenCvResourceHelper.getResourcePath(PROTO_FILE, PersonDetector.class);
             String modelPath = OpenCvResourceHelper.getResourcePath(MODEL_FILE, PersonDetector.class);
@@ -84,6 +96,9 @@ public class PersonDetector implements IDetector {
 
     public synchronized List<Rect> detect(Mat image) {
         List<Rect> people = new ArrayList<>();
+        // Car boxes as plain int arrays {left, top, right, bottom} to avoid native
+        // Rect allocations for a class we never return to the caller
+        List<int[]> cars = new ArrayList<>();
 
         // Validate input
         if (image == null || image.empty()) {
@@ -152,41 +167,75 @@ public class PersonDetector implements IDetector {
                 int classId = (int) indexer.get(i, 1);
                 float confidence = indexer.get(i, 2);
 
+                // Convert normalized coordinates to pixel coordinates
+                float x1 = indexer.get(i, 3);
+                float y1 = indexer.get(i, 4);
+                float x2 = indexer.get(i, 5);
+                float y2 = indexer.get(i, 6);
+
+                int left = (int) (x1 * originalWidth);
+                int top = (int) (y1 * originalHeight);
+                int right = (int) (x2 * originalWidth);
+                int bottom = (int) (y2 * originalHeight);
+
+                // Ensure coordinates are within image bounds
+                left = Math.max(0, left);
+                top = Math.max(0, top);
+                right = Math.min(originalWidth - 1, right);
+                bottom = Math.min(originalHeight - 1, bottom);
+
+                int width = right - left;
+                int height = bottom - top;
+
+                // Validate rectangle dimensions
+                if (width <= 0 || height <= 0) {
+                    continue;
+                }
+
                 // Check if detection is a person with sufficient confidence
                 if (classId == PERSON_CLASS_ID && confidence > personConfidenceThreshold) {
-                    float x1 = indexer.get(i, 3);
-                    float y1 = indexer.get(i, 4);
-                    float x2 = indexer.get(i, 5);
-                    float y2 = indexer.get(i, 6);
-
-                    // Convert normalized coordinates to pixel coordinates
-                    int left = (int) (x1 * originalWidth);
-                    int top = (int) (y1 * originalHeight);
-                    int right = (int) (x2 * originalWidth);
-                    int bottom = (int) (y2 * originalHeight);
-
-                    // Ensure coordinates are within image bounds
-                    left = Math.max(0, left);
-                    top = Math.max(0, top);
-                    right = Math.min(originalWidth - 1, right);
-                    bottom = Math.min(originalHeight - 1, bottom);
-
-                    int width = right - left;
-                    int height = bottom - top;
-
-                    // Validate rectangle dimensions
-                    if (width > 0 && height > 0) {
-                        Rect personRect = new Rect(left, top, width, height);
-                        people.add(personRect);
-                        log.debug("Detected person at ({}, {}) with size {}x{} and confidence {}",
-                                left, top, width, height, String.format("%.2f", confidence));
-                    }
+                    Rect personRect = new Rect(left, top, width, height);
+                    people.add(personRect);
+                    log.debug("Detected person at ({}, {}) with size {}x{} and confidence {}",
+                            left, top, width, height, String.format("%.2f", confidence));
+                } else if (classId == CAR_CLASS_ID && confidence > carConfidenceThreshold) {
+                    // Collect car boxes to suppress person false positives (no native allocation)
+                    cars.add(new int[]{left, top, right, bottom});
+                    log.debug("Detected car at ({}, {}, {}, {}) with confidence {}",
+                            left, top, right, bottom, String.format("%.2f", confidence));
                 }
             }
 
             if (!people.isEmpty()) {
                 log.debug("Detected {} person(s) in image", people.size());
             }
+
+            // Suppress false-positive person boxes:
+            // 1. Person box overlapping a detected car box with IoU > CAR_SUPPRESSION_IOU
+            // 2. Person box whose area exceeds maxPersonAreaRatio of the frame area
+            double frameArea = (double) originalWidth * originalHeight;
+            List<Rect> survivors = new ArrayList<>(people.size());
+            for (Rect person : people) {
+                boolean suppressed = person.width() * person.height() > maxPersonAreaRatio * frameArea;
+                if (!suppressed) {
+                    for (int[] car : cars) {
+                        if (iou(person, car) > CAR_SUPPRESSION_IOU) {
+                            suppressed = true;
+                            break;
+                        }
+                    }
+                }
+                if (suppressed) {
+                    log.debug("Suppressing person box at ({}, {}) size {}x{} (car overlap or area exceeds {} of frame)",
+                            person.x(), person.y(), person.width(), person.height(),
+                            String.format("%.2f", maxPersonAreaRatio));
+                    // Caller only deallocates the Rects in the returned list, so release suppressed ones here
+                    person.deallocate();
+                } else {
+                    survivors.add(person);
+                }
+            }
+            people = survivors;
 
         } catch (Exception e) {
             log.error("Error during person detection: {}", e.getMessage(), e);
@@ -263,6 +312,20 @@ public class PersonDetector implements IDetector {
 
     private static double normalizeConfidenceThreshold(double threshold) {
         return Math.max(0.0, Math.min(1.0, threshold));
+    }
+
+    private static double iou(Rect p, int[] car) {
+        int ix1 = Math.max(p.x(), car[0]);
+        int iy1 = Math.max(p.y(), car[1]);
+        int ix2 = Math.min(p.x() + p.width(), car[2]);
+        int iy2 = Math.min(p.y() + p.height(), car[3]);
+        if (ix2 <= ix1 || iy2 <= iy1) {
+            return 0.0;
+        }
+        double inter = (double) (ix2 - ix1) * (iy2 - iy1);
+        double union = (double) p.width() * p.height()
+                + (double) (car[2] - car[0]) * (car[3] - car[1]) - inter;
+        return union <= 0 ? 0.0 : inter / union;
     }
 
     private static int mapTarget(AccelerationProperties.Target target) {

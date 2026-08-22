@@ -21,6 +21,8 @@ face-recognition:
     fallback-to-cpu: true
   detection:
     person-confidence-threshold: 0.8
+    car-confidence-threshold: 0.5
+    max-person-area-ratio: 0.45
   telegram:
     # Animation FPS for Telegram tracking clips (higher = smoother, larger/heavier files)
     gif-fps: 10
