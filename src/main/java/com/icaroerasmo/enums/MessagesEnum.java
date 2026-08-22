@@ -5,5 +5,9 @@ public enum MessagesEnum {
     CAM_RECONNECTING,
     CAM_CONNECTED,
     CAM_HIBERNATING,
-    CAM_HIBERNATE_COMPLETE
+    CAM_HIBERNATE_COMPLETE,
+
+    // Detection events (published to live-transmission overlay via detection.exchange)
+    PERSON_DETECTED_UNKNOWN,
+    PERSON_DETECTED_KNOWN
 }
