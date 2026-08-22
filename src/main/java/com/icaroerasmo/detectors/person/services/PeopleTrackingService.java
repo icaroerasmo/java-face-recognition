@@ -1,5 +1,7 @@
 package com.icaroerasmo.detectors.person.services;
 
+import com.icaroerasmo.enums.MessagesEnum;
+import com.icaroerasmo.messaging.DetectionEventPublisher;
 import com.icaroerasmo.properties.StreamsProperties;
 import com.icaroerasmo.service.GifCreationService;
 import com.icaroerasmo.service.TelegramPublisherService;
@@ -39,6 +41,7 @@ public class PeopleTrackingService {
     private final DetectionHistoryService detectionHistoryService;
     private final MatUtil matUtil;
     private final GifCreationService gifCreationService;
+    private final DetectionEventPublisher detectionEventPublisher;
     private final StreamsProperties streamsProperties;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
 
@@ -52,12 +55,14 @@ public class PeopleTrackingService {
                                DetectionHistoryService detectionHistoryService,
                                MatUtil matUtil,
                                GifCreationService gifCreationService,
-                               StreamsProperties streamsProperties) {
+                               StreamsProperties streamsProperties,
+                               DetectionEventPublisher detectionEventPublisher) {
         this.telegramPublisherService = telegramPublisherService;
         this.detectionHistoryService = detectionHistoryService;
         this.matUtil = matUtil;
         this.gifCreationService = gifCreationService;
         this.streamsProperties = streamsProperties;
+        this.detectionEventPublisher = detectionEventPublisher;
     }
 
     @PreDestroy
@@ -289,6 +294,17 @@ public class PeopleTrackingService {
 
                 // Send notification with annotated image (with rectangle) and determined identity
                 telegramPublisherService.publishDetection(annotatedImageBytes, identityScores, cameraName, identityFrameCount, totalTrackedFrames);
+
+                // Publish detection event to RabbitMQ for the live-stream overlay
+                try {
+                    MessagesEnum template = isUnknown
+                            ? MessagesEnum.PERSON_DETECTED_UNKNOWN
+                            : MessagesEnum.PERSON_DETECTED_KNOWN;
+                    List<String> args = isUnknown ? List.of() : List.of(determinedIdentity);
+                    detectionEventPublisher.publish(cameraName, template, args);
+                } catch (Exception e) {
+                    log.error("Failed to publish detection event for camera '{}': {}", cameraName, e.getMessage());
+                }
 
                 log.info("✅ NOTIFICATION SENT SUCCESSFULLY for '{}' (identified in {} frames, tracked across {} total frames)",
                     determinedIdentity, identityFrameCount, totalTrackedFrames);

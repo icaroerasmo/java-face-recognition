@@ -23,6 +23,10 @@ public class RabbitConfig {
     public static final String TELEGRAM_DLX = "telegram.dlx";
     public static final String TELEGRAM_DLQ_ROUTING_KEY = "telegram.notifications.dlq";
 
+    public static final String DETECTION_EXCHANGE = "detection.exchange";
+    public static final String DETECTION_QUEUE = "detection.events";
+    public static final String DETECTION_ROUTING_KEY = "detection.events";
+
     @Bean
     public DirectExchange telegramExchange() {
         return new DirectExchange(TELEGRAM_EXCHANGE, true, false);
@@ -39,6 +43,21 @@ public class RabbitConfig {
     @Bean
     public Binding telegramBinding(DirectExchange telegramExchange, Queue telegramQueue) {
         return BindingBuilder.bind(telegramQueue).to(telegramExchange).with(TELEGRAM_ROUTING_KEY);
+    }
+
+    @Bean
+    public DirectExchange detectionExchange() {
+        return new DirectExchange(DETECTION_EXCHANGE, true, false);
+    }
+
+    @Bean
+    public Queue detectionQueue() {
+        return QueueBuilder.durable(DETECTION_QUEUE).build();
+    }
+
+    @Bean
+    public Binding detectionBinding(DirectExchange detectionExchange, Queue detectionQueue) {
+        return BindingBuilder.bind(detectionQueue).to(detectionExchange).with(DETECTION_ROUTING_KEY);
     }
 
     @Bean
