@@ -72,4 +72,19 @@ public final class DetectionClassFilter {
     public static boolean shouldSuppress(double iou, double suppressionIouThreshold) {
         return iou > suppressionIouThreshold;
     }
+
+    /**
+     * Human-readable COCO class token used for diagnostic logging. Known classes
+     * are named; any other class falls back to its raw class id (e.g. {@code class3}).
+     */
+    public static String classIdToName(int classId) {
+        return switch (classId) {
+            case PERSON_CLASS_ID -> "person";
+            case CAR_CLASS_ID -> "car";
+            case DOG_CLASS_ID -> "dog";
+            case CAT_CLASS_ID -> "cat";
+            case POTTED_PLANT_CLASS_ID -> "pottedplant";
+            default -> "class" + classId;
+        };
+    }
 }
