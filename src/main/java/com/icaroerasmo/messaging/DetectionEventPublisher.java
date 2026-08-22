@@ -44,7 +44,7 @@ public class DetectionEventPublisher {
      * so the live-stream overlay appears as soon as a person is detected
      * (without waiting for the multi-frame tracking verdict).
      */
-    public void publishPresence(String cameraName, String personName) {
+    public void publishPresence(String cameraName) {
         long now = System.currentTimeMillis();
         Long last = lastPresencePublish.get(cameraName);
         if (last != null && now - last < PRESENCE_DEBOUNCE_MS) {
@@ -52,10 +52,6 @@ public class DetectionEventPublisher {
         }
         lastPresencePublish.put(cameraName, now);
 
-        boolean known = personName != null && !personName.isBlank()
-                && !"Unknown".equalsIgnoreCase(personName);
-        MessagesEnum template = known ? MessagesEnum.PERSON_DETECTED_KNOWN : MessagesEnum.PERSON_DETECTED_UNKNOWN;
-        List<String> args = known ? List.of(personName) : List.of();
-        publish(cameraName, template, args);
+        publish(cameraName, MessagesEnum.PERSON_DETECTED, List.of());
     }
 }

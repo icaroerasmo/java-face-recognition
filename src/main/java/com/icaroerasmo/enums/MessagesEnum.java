@@ -8,6 +8,5 @@ public enum MessagesEnum {
     CAM_HIBERNATE_COMPLETE,
 
     // Detection events (published to live-transmission overlay via detection.exchange)
-    PERSON_DETECTED_UNKNOWN,
-    PERSON_DETECTED_KNOWN
+    PERSON_DETECTED
 }

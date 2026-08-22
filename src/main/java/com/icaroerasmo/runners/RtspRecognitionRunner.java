@@ -26,7 +26,6 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -115,19 +114,6 @@ public class RtspRecognitionRunner {
         return faceRecognitionService.test(currentRecognizer, img);
     }
 
-    private void publishPresenceEvent(String cameraName, List<FaceRecognition.DetectedFaces> faces) {
-        String primaryName = "Unknown";
-        if (faces != null && !faces.isEmpty()) {
-            FaceRecognition.DetectedFaces best = faces.stream()
-                    .min(Comparator.comparingDouble(FaceRecognition.DetectedFaces::getDistance))
-                    .orElse(null);
-            if (best != null && best.getPersonName() != null && !best.getPersonName().isBlank()) {
-                primaryName = best.getPersonName();
-            }
-        }
-        detectionEventPublisher.publishPresence(cameraName, primaryName);
-    }
-
     /**
      * Process a single camera stream with automatic reconnection
      */
@@ -206,7 +192,7 @@ public class RtspRecognitionRunner {
                                 faceRecognition != null ? faceRecognition.getFaces() : null;
 
                         // Publish low-latency presence event for the live-stream overlay (debounced)
-                        publishPresenceEvent(cameraName, faces);
+                        detectionEventPublisher.publishPresence(cameraName);
 
                         // STEP 3: Check if faces were detected
                         if (faces == null || faces.isEmpty()) {
