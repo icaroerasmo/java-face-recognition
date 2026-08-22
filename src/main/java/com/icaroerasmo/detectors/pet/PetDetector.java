@@ -2,7 +2,7 @@ package com.icaroerasmo.detectors.pet;
 
 import com.icaroerasmo.detectors.shared.CocoDetection;
 import com.icaroerasmo.detectors.shared.DetectionClassFilter;
-import com.icaroerasmo.detectors.shared.MobileNetSsdDetector;
+import com.icaroerasmo.detectors.shared.YoloDetector;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.Mat;
@@ -19,11 +19,11 @@ import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DOG_CLASS_ID
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.POTTED_PLANT_CLASS_ID;
 
 /**
- * Detects pets (PASCAL VOC {@code dog} = 12 and {@code cat} = 8) using the SAME
- * MobileNet-SSD model as {@code PersonDetector} (see {@link MobileNetSsdDetector}).
+ * Detects pets (COCO {@code dog} = 16 and {@code cat} = 15) using the SAME
+ * YOLOv8n model as {@code PersonDetector} (see {@link YoloDetector}).
  *
  * <p>Mirroring the car-suppression in {@code PersonDetector}, any dog/cat box whose
- * IoU with a {@code potted plant} (PASCAL VOC class 16) box exceeds
+ * IoU with a {@code potted plant} (COCO class 58) box exceeds
  * {@code plantSuppressionIou} is suppressed - the model occasionally misclassifies a
  * potted plant as a dog, so an overlapping plant box vetoes the pet detection.
  *
@@ -37,16 +37,16 @@ import static com.icaroerasmo.detectors.shared.DetectionClassFilter.POTTED_PLANT
 @Service
 public class PetDetector {
 
-    private final MobileNetSsdDetector mobileNetSsdDetector;
+    private final YoloDetector yoloDetector;
     private final double petConfidenceThreshold;
     private final double plantConfidenceThreshold;
     private final double plantSuppressionIou;
 
     public PetDetector(
-            MobileNetSsdDetector mobileNetSsdDetector,
+            YoloDetector yoloDetector,
             ObjectDetectionProperties objectDetectionProperties
     ) {
-        this.mobileNetSsdDetector = mobileNetSsdDetector;
+        this.yoloDetector = yoloDetector;
         var pet = objectDetectionProperties.getDetection().getPet();
         this.petConfidenceThreshold = clamp01(pet.getConfidenceThreshold());
         this.plantConfidenceThreshold = clamp01(pet.getPlantConfidenceThreshold());
@@ -54,7 +54,7 @@ public class PetDetector {
     }
 
     public synchronized List<PetDetection> detect(Mat image) {
-        List<CocoDetection> detections = mobileNetSsdDetector.detectRaw(image);
+        List<CocoDetection> detections = yoloDetector.detectRaw(image);
         if (detections.isEmpty()) {
             return List.of();
         }

@@ -87,14 +87,14 @@ class DetectionClassFilterTest {
     // --- Pure IoU / plant-suppression decision helpers -------------------------
 
     @Test
-    void vocClassIdConstantsAreCorrect() {
-        // The shared model is PASCAL VOC (1-indexed, 0 = background): the ids must be
-        // person=15, car=7, dog=12, cat=8, pottedplant=16.
-        assertEquals(15, PERSON_CLASS_ID);
-        assertEquals(7, CAR_CLASS_ID);
-        assertEquals(12, DOG_CLASS_ID);
-        assertEquals(8, CAT_CLASS_ID);
-        assertEquals(16, POTTED_PLANT_CLASS_ID);
+    void cocoClassIdConstantsAreCorrect() {
+        // The shared model is YOLOv8n (COCO, 0-indexed): the ids must be
+        // person=0, car=2, dog=16, cat=15, pottedplant=58.
+        assertEquals(0, PERSON_CLASS_ID);
+        assertEquals(2, CAR_CLASS_ID);
+        assertEquals(16, DOG_CLASS_ID);
+        assertEquals(15, CAT_CLASS_ID);
+        assertEquals(58, POTTED_PLANT_CLASS_ID);
     }
 
     @Test
@@ -201,8 +201,10 @@ class DetectionClassFilterTest {
 
     @Test
     void classIdToNameFallsBackToRawIdForUnknownClasses() {
+        // 3 is a real COCO class (motorcycle) but is not named here; 80 and 999 are
+        // out of the 80-class range. None of these may map to a known name.
         assertEquals("class3", classIdToName(3));
-        assertEquals("class0", classIdToName(0));
         assertEquals("class80", classIdToName(80));
+        assertEquals("class999", classIdToName(999));
     }
 }
