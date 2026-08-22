@@ -35,7 +35,7 @@ object-detection:
       dilation-iterations: 2
     pet:
       enabled: true
-      confidence-threshold: 0.5
+      confidence-threshold: 0.3
       plant-confidence-threshold: 0.5
       plant-suppression-iou: 0.35
       debounce-ms: 5000

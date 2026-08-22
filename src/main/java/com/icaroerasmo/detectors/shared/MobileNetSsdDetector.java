@@ -15,7 +15,10 @@ import org.bytedeco.opencv.opencv_dnn.Net;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 import static org.bytedeco.opencv.global.opencv_core.CV_32F;
 import static org.bytedeco.opencv.global.opencv_dnn.DNN_BACKEND_OPENCV;
@@ -45,6 +48,13 @@ public class MobileNetSsdDetector {
     private static final String MODEL_FILE = "opencv/SSD_MobileNet.caffemodel";
     private static final int INPUT_SIZE = 300;
     private static final double SCALE_FACTOR = 0.007843; // 1/127.5
+
+    // Diagnostic logging: at most one RAW_DET line every 2s, listing only detections
+    // above this confidence floor. Purely observational - never changes detection.
+    private static final long RAW_LOG_INTERVAL_MS = 2000;
+    private static final float RAW_LOG_MIN_CONFIDENCE = 0.10f;
+
+    private volatile long lastRawLogTime = 0L;
 
     private final Net net;
     private final MatUtil matUtil;
@@ -170,6 +180,8 @@ public class MobileNetSsdDetector {
                 detections.add(new CocoDetection(classId, confidence, new Rect(left, top, width, height)));
             }
 
+            logRawDetections(detections);
+
             return detections;
         } catch (Exception e) {
             log.error("Error during MobileNet-SSD detection: {}", e.getMessage(), e);
@@ -222,6 +234,41 @@ public class MobileNetSsdDetector {
 
     private static int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(value, max));
+    }
+
+    /**
+     * Throttled INFO diagnostic: one line listing raw detections with class name +
+     * confidence (e.g. {@code RAW_DET: person=0.82 dog=0.31 pottedplant=0.12 car=0.11}).
+     * One entry per class (highest confidence kept), only detections above
+     * {@value #RAW_LOG_MIN_CONFIDENCE}. At most one line per {@value #RAW_LOG_INTERVAL_MS} ms.
+     */
+    private void logRawDetections(List<CocoDetection> detections) {
+        long now = System.currentTimeMillis();
+        if (now - lastRawLogTime < RAW_LOG_INTERVAL_MS) {
+            return;
+        }
+        lastRawLogTime = now;
+
+        // Preserve first-seen (model output) order, keeping the best confidence per class.
+        Map<Integer, Float> bestByClass = new LinkedHashMap<>();
+        for (CocoDetection detection : detections) {
+            if (detection.confidence() <= RAW_LOG_MIN_CONFIDENCE) {
+                continue;
+            }
+            bestByClass.merge(detection.classId(), detection.confidence(), Math::max);
+        }
+        if (bestByClass.isEmpty()) {
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder("RAW_DET:");
+        for (Map.Entry<Integer, Float> entry : bestByClass.entrySet()) {
+            sb.append(' ')
+              .append(DetectionClassFilter.classIdToName(entry.getKey()))
+              .append('=')
+              .append(String.format(Locale.ROOT, "%.2f", entry.getValue()));
+        }
+        log.info(sb.toString());
     }
 
     private static void configureNet(

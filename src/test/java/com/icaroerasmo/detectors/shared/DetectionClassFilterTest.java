@@ -12,6 +12,7 @@ import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionTyp
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionType.PERSON;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DetectionType.PET;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.classify;
+import static com.icaroerasmo.detectors.shared.DetectionClassFilter.classIdToName;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.intersectionOverUnion;
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.shouldSuppress;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -181,5 +182,21 @@ class DetectionClassFilterTest {
         // Strong person/pet overlap (IoU 0.81 > 0.35) -> suppressed.
         double heavy = intersectionOverUnion(0, 0, 100, 100, 5, 5, 90, 90);
         assertTrue(shouldSuppress(heavy, 0.35));
+    }
+
+    @Test
+    void classIdToNameMapsKnownClasses() {
+        assertEquals("person", classIdToName(PERSON_CLASS_ID));
+        assertEquals("car", classIdToName(CAR_CLASS_ID));
+        assertEquals("dog", classIdToName(DOG_CLASS_ID));
+        assertEquals("cat", classIdToName(CAT_CLASS_ID));
+        assertEquals("pottedplant", classIdToName(POTTED_PLANT_CLASS_ID));
+    }
+
+    @Test
+    void classIdToNameFallsBackToRawIdForUnknownClasses() {
+        assertEquals("class3", classIdToName(3));
+        assertEquals("class0", classIdToName(0));
+        assertEquals("class80", classIdToName(80));
     }
 }

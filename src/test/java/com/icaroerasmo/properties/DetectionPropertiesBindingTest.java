@@ -50,7 +50,7 @@ class DetectionPropertiesBindingTest {
     void petDefaultsApplyWhenNoKeysProvided() {
         PetDetectionProperties pet = bind(Map.of()).getDetection().getPet();
         assertTrue(pet.isEnabled());
-        assertEquals(0.5, pet.getConfidenceThreshold(), 1e-9);
+        assertEquals(0.3, pet.getConfidenceThreshold(), 1e-9);
         assertEquals(0.5, pet.getPlantConfidenceThreshold(), 1e-9);
         assertEquals(0.35, pet.getPlantSuppressionIou(), 1e-9);
         assertEquals(5000L, pet.getDebounceMs());
