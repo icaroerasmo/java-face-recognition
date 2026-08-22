@@ -3,7 +3,7 @@ package com.icaroerasmo.detectors.person;
 import com.icaroerasmo.detectors.IDetector;
 import com.icaroerasmo.detectors.shared.CocoDetection;
 import com.icaroerasmo.detectors.shared.DetectionClassFilter;
-import com.icaroerasmo.detectors.shared.MobileNetSsdDetector;
+import com.icaroerasmo.detectors.shared.YoloDetector;
 import com.icaroerasmo.properties.DetectionProperties;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
 import lombok.extern.log4j.Log4j2;
@@ -18,16 +18,16 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Service for detecting people using the shared SSD MobileNet model
- * ({@link MobileNetSsdDetector}). Person class 15 detections above the configured
+ * Service for detecting people using the shared YOLOv8n model
+ * ({@link YoloDetector}). COCO person class 0 detections above the configured
  * confidence are kept; false-positive person boxes are suppressed when they overlap
- * a car (class 7) or a dog/cat (class 12/8 - the model occasionally misclassifies
- * a dog as person with higher confidence than dog), or when their area exceeds
- * {@code maxPersonAreaRatio}.
+ * a car (COCO class 2) or a dog/cat (COCO class 16/15 - the model occasionally
+ * misclassifies a dog as person with higher confidence than dog), or when their area
+ * exceeds {@code maxPersonAreaRatio}.
  *
  * <p>The public {@link #detect} remains {@code synchronized} to guard the shared
  * model/net across cameras. Every DNN forward pass happens inside
- * {@link MobileNetSsdDetector#detectRaw}, which runs under
+ * {@link YoloDetector#detectRaw}, which runs under
  * {@link com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper#runExclusive}.
  * Returned {@link Rect}s are owned by the caller.
  */
@@ -38,17 +38,17 @@ public class PersonDetector implements IDetector {
     private static final double CAR_SUPPRESSION_IOU = 0.35;
     private static final double PET_SUPPRESSION_IOU = 0.35;
 
-    private final MobileNetSsdDetector mobileNetSsdDetector;
+    private final YoloDetector yoloDetector;
     private final double personConfidenceThreshold;
     private final double carConfidenceThreshold;
     private final double petConfidenceThreshold;
     private final double maxPersonAreaRatio;
 
     public PersonDetector(
-            MobileNetSsdDetector mobileNetSsdDetector,
+            YoloDetector yoloDetector,
             ObjectDetectionProperties objectDetectionProperties
     ) {
-        this.mobileNetSsdDetector = mobileNetSsdDetector;
+        this.yoloDetector = yoloDetector;
         DetectionProperties detection = objectDetectionProperties.getDetection();
         this.personConfidenceThreshold = normalizeConfidenceThreshold(
                 detection.getPersonConfidenceThreshold());
@@ -67,7 +67,7 @@ public class PersonDetector implements IDetector {
             return new ArrayList<>();
         }
 
-        List<CocoDetection> detections = mobileNetSsdDetector.detectRaw(image);
+        List<CocoDetection> detections = yoloDetector.detectRaw(image);
         if (detections.isEmpty()) {
             return new ArrayList<>();
         }

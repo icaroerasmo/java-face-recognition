@@ -1,22 +1,21 @@
 package com.icaroerasmo.detectors.shared;
 
 /**
- * Pure PASCAL VOC class filter shared by {@code PersonDetector} and {@code PetDetector}.
+ * Pure COCO class filter shared by {@code PersonDetector} and {@code PetDetector}.
  * Kept free of OpenCV so the classification logic is unit-testable without native
  * resources.
  *
- * <p>The shared {@code SSD_MobileNet} model is trained on PASCAL VOC (prototxt
- * {@code num_classes: 21}, i.e. 20 VOC classes + background), so class ids are the
- * 1-indexed VOC ids (0 = background): 7 car, 8 cat, 12 dog, 15 person, 16 pottedplant.
+ * <p>The shared {@code yolov8n.onnx} model is trained on COCO (80 classes,
+ * 0-indexed): 0 person, 2 car, 15 cat, 16 dog, 58 pottedplant.
  */
 public final class DetectionClassFilter {
 
-    // PASCAL VOC class ids (1-indexed, 0 = background)
-    public static final int PERSON_CLASS_ID = 15;
-    public static final int CAR_CLASS_ID = 7;
-    public static final int DOG_CLASS_ID = 12;
-    public static final int CAT_CLASS_ID = 8;
-    public static final int POTTED_PLANT_CLASS_ID = 16;
+    // COCO class ids (0-indexed, as emitted by YOLOv8n)
+    public static final int PERSON_CLASS_ID = 0;
+    public static final int CAR_CLASS_ID = 2;
+    public static final int DOG_CLASS_ID = 16;
+    public static final int CAT_CLASS_ID = 15;
+    public static final int POTTED_PLANT_CLASS_ID = 58;
 
     public enum DetectionType { PERSON, CAR, PET, NONE }
 
@@ -79,7 +78,7 @@ public final class DetectionClassFilter {
     }
 
     /**
-     * Human-readable PASCAL VOC class token used for diagnostic logging. Known classes
+     * Human-readable COCO class token used for diagnostic logging. Known classes
      * are named; any other class falls back to its raw class id (e.g. {@code class3}).
      */
     public static String classIdToName(int classId) {
