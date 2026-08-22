@@ -19,11 +19,11 @@ import static com.icaroerasmo.detectors.shared.DetectionClassFilter.DOG_CLASS_ID
 import static com.icaroerasmo.detectors.shared.DetectionClassFilter.POTTED_PLANT_CLASS_ID;
 
 /**
- * Detects pets (COCO {@code dog} = 16 and {@code cat} = 17) using the SAME
+ * Detects pets (PASCAL VOC {@code dog} = 12 and {@code cat} = 8) using the SAME
  * MobileNet-SSD model as {@code PersonDetector} (see {@link MobileNetSsdDetector}).
  *
  * <p>Mirroring the car-suppression in {@code PersonDetector}, any dog/cat box whose
- * IoU with a {@code potted plant} (COCO class 58) box exceeds
+ * IoU with a {@code potted plant} (PASCAL VOC class 16) box exceeds
  * {@code plantSuppressionIou} is suppressed - the model occasionally misclassifies a
  * potted plant as a dog, so an overlapping plant box vetoes the pet detection.
  *
