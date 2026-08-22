@@ -51,6 +51,8 @@ class DetectionPropertiesBindingTest {
         PetDetectionProperties pet = bind(Map.of()).getDetection().getPet();
         assertTrue(pet.isEnabled());
         assertEquals(0.5, pet.getConfidenceThreshold(), 1e-9);
+        assertEquals(0.5, pet.getPlantConfidenceThreshold(), 1e-9);
+        assertEquals(0.35, pet.getPlantSuppressionIou(), 1e-9);
         assertEquals(5000L, pet.getDebounceMs());
         assertEquals(30000L, pet.getTelegramThrottleMs());
     }
@@ -93,12 +95,16 @@ class DetectionPropertiesBindingTest {
         Map<String, Object> props = new HashMap<>();
         props.put("object-detection.detection.pet.enabled", "false");
         props.put("object-detection.detection.pet.confidence-threshold", "0.65");
+        props.put("object-detection.detection.pet.plant-confidence-threshold", "0.7");
+        props.put("object-detection.detection.pet.plant-suppression-iou", "0.5");
         props.put("object-detection.detection.pet.debounce-ms", "10000");
         props.put("object-detection.detection.pet.telegram-throttle-ms", "45000");
 
         PetDetectionProperties pet = bind(props).getDetection().getPet();
         assertFalse(pet.isEnabled());
         assertEquals(0.65, pet.getConfidenceThreshold(), 1e-9);
+        assertEquals(0.7, pet.getPlantConfidenceThreshold(), 1e-9);
+        assertEquals(0.5, pet.getPlantSuppressionIou(), 1e-9);
         assertEquals(10000L, pet.getDebounceMs());
         assertEquals(45000L, pet.getTelegramThrottleMs());
     }
