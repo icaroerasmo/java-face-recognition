@@ -45,7 +45,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 RUN mkdir -p /app/data/tmp /app/data/records /app/train /app/config /app/opencv
 
 # Copy the built jar from the build stage
-COPY --from=build /app/target/rtsp-face-recognition-*.jar /app/rtsp-face-recognition.jar
+COPY --from=build /app/target/rtsp-object-detection-*.jar /app/rtsp-object-detection.jar
 
 # Copy training data from build stage if it exists
 RUN cp -r /app/target/classes/train/* /app/train/ 2>/dev/null || echo "Training data not found in build stage"
@@ -55,4 +55,4 @@ COPY --from=build /app/target/classes/opencv/ /app/opencv/
 
 RUN ls -la /app && ls -la /app/train 2>/dev/null || echo "train directory may be empty" && ls -la /app/opencv 2>/dev/null || echo "opencv directory may be empty"
 
-ENTRYPOINT [ "java", "-Dspring.config.additional-location=/app/config/config.yaml", "-jar", "/app/rtsp-face-recognition.jar" ]
+ENTRYPOINT [ "java", "-Dspring.config.additional-location=/app/config/config.yaml", "-jar", "/app/rtsp-object-detection.jar" ]

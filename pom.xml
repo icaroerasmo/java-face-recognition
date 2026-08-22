@@ -10,9 +10,9 @@
 
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.icaroerasmo.com</groupId>
-  <artifactId>rtsp-face-recognition</artifactId>
+  <artifactId>rtsp-object-detection</artifactId>
   <version>0.4.6</version>
-  <name>Archetype - rtsp-face-recognition</name>
+  <name>object-detection</name>
   <url>http://maven.apache.org</url>
 
   <properties>
@@ -75,6 +75,12 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!-- Test infrastructure (hermetic unit tests; no GPU/OpenCL/RabbitMQ/Spring context) -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
     </dependency>
   </dependencies>
   <build>

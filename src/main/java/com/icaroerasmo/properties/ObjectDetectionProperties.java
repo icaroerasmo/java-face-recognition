@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
 @Getter
 @Setter
 @Component
-@ConfigurationProperties(prefix = "face-recognition")
-public class FaceRecognitionProperties {
+@ConfigurationProperties(prefix = "object-detection")
+public class ObjectDetectionProperties {
 
     private Boolean enabled = true;
 

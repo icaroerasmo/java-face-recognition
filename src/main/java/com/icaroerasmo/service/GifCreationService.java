@@ -1,6 +1,6 @@
 package com.icaroerasmo.service;
 
-import com.icaroerasmo.properties.FaceRecognitionProperties;
+import com.icaroerasmo.properties.ObjectDetectionProperties;
 import com.icaroerasmo.utils.MatUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
@@ -20,7 +20,7 @@ import java.util.List;
 public class GifCreationService {
 
     private final MatUtil matUtil;
-    private final FaceRecognitionProperties faceRecognitionProperties;
+    private final ObjectDetectionProperties objectDetectionProperties;
 
     // GIF parameters
     private static final int GIF_WIDTH = 640; // Resize frames to this width for smaller file size
@@ -226,10 +226,10 @@ public class GifCreationService {
     }
 
     public int getGifFps() {
-        return Math.max(1, faceRecognitionProperties.getTelegram().getGifFps());
+        return Math.max(1, objectDetectionProperties.getTelegram().getGifFps());
     }
 
     public int getMaxGifFrames() {
-        return Math.max(MIN_FRAMES, faceRecognitionProperties.getTelegram().getGifMaxFrames());
+        return Math.max(MIN_FRAMES, objectDetectionProperties.getTelegram().getGifMaxFrames());
     }
 }

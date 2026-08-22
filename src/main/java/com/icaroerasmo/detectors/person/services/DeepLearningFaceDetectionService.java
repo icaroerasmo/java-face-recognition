@@ -1,7 +1,7 @@
 package com.icaroerasmo.detectors.person.services;
 
 import com.icaroerasmo.properties.AccelerationProperties;
-import com.icaroerasmo.properties.FaceRecognitionProperties;
+import com.icaroerasmo.properties.ObjectDetectionProperties;
 import com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper;
 import com.icaroerasmo.utils.MatUtil;
 import com.icaroerasmo.utils.OpenCvResourceHelper;
@@ -48,7 +48,7 @@ public class DeepLearningFaceDetectionService {
 
     public DeepLearningFaceDetectionService(
             MatUtil matUtil,
-            FaceRecognitionProperties faceRecognitionProperties,
+            ObjectDetectionProperties objectDetectionProperties,
             DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper
     ) {
         this.matUtil = matUtil;
@@ -60,12 +60,12 @@ public class DeepLearningFaceDetectionService {
             this.net = readNetFromONNX(modelPath);
             configureNet(
                     this.net,
-                    faceRecognitionProperties.getAcceleration().getBackend(),
+                    objectDetectionProperties.getAcceleration().getBackend(),
                     resolveTarget(
-                            faceRecognitionProperties.getAcceleration(),
-                            faceRecognitionProperties.getAcceleration().getFaceDetectionTarget()
+                            objectDetectionProperties.getAcceleration(),
+                            objectDetectionProperties.getAcceleration().getFaceDetectionTarget()
                     ),
-                    faceRecognitionProperties.getAcceleration().isFallbackToCpu(),
+                    objectDetectionProperties.getAcceleration().isFallbackToCpu(),
                     "face detection"
             );
             log.info("SCRFD face detection model loaded successfully");

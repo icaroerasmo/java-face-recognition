@@ -11,7 +11,7 @@ import java.util.List;
 @Getter
 @Setter
 @Component
-@ConfigurationProperties(prefix = "face-recognition.streams")
+@ConfigurationProperties(prefix = "object-detection.streams")
 public class StreamsProperties {
 
     /**

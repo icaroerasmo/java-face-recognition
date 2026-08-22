@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Log4j2
 @Service
@@ -23,6 +24,8 @@ public class DetectionEventPublisher {
     private RabbitTemplate rabbitTemplate;
 
     private final Map<String, Long> lastPresencePublish = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastMovementPublish = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastPetPublish = new ConcurrentHashMap<>();
 
     public void publish(String cameraName, MessagesEnum template, List<String> args) {
         DetectionEvent event = new DetectionEvent(
@@ -45,13 +48,47 @@ public class DetectionEventPublisher {
      * (without waiting for the multi-frame tracking verdict).
      */
     public void publishPresence(String cameraName) {
-        long now = System.currentTimeMillis();
-        Long last = lastPresencePublish.get(cameraName);
-        if (last != null && now - last < PRESENCE_DEBOUNCE_MS) {
-            return;
-        }
-        lastPresencePublish.put(cameraName, now);
+        publishDebounced(cameraName, PRESENCE_DEBOUNCE_MS, MessagesEnum.PERSON_DETECTED, lastPresencePublish);
+    }
 
-        publish(cameraName, MessagesEnum.PERSON_DETECTED, List.of());
+    /**
+     * Publishes a {@code MOVEMENT_DETECTED} overlay event, atomically debounced per
+     * camera with the given window.
+     */
+    public void publishMovement(String cameraName, long debounceMs) {
+        publishDebounced(cameraName, debounceMs, MessagesEnum.MOVEMENT_DETECTED, lastMovementPublish);
+    }
+
+    /**
+     * Publishes a {@code PET_DETECTED} overlay event, atomically debounced per
+     * camera with the given window.
+     */
+    public void publishPet(String cameraName, long debounceMs) {
+        publishDebounced(cameraName, debounceMs, MessagesEnum.PET_DETECTED, lastPetPublish);
+    }
+
+    /**
+     * Atomic per-camera debounce: the decision to publish and the timestamp update
+     * happen inside {@link ConcurrentHashMap#compute}, never as a read-then-write.
+     */
+    private void publishDebounced(
+            String cameraName,
+            long debounceMs,
+            MessagesEnum template,
+            Map<String, Long> lastPublishByCamera
+    ) {
+        long now = System.currentTimeMillis();
+        AtomicBoolean shouldPublish = new AtomicBoolean(false);
+        lastPublishByCamera.compute(cameraName, (key, last) -> {
+            if (last != null && now - last < debounceMs) {
+                return last; // suppressed: within the debounce window
+            }
+            shouldPublish.set(true);
+            return now;
+        });
+
+        if (shouldPublish.get()) {
+            publish(cameraName, template, List.of());
+        }
     }
 }

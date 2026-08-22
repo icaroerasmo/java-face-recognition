@@ -1,25 +1,21 @@
 package com.icaroerasmo.runners;
 
-import com.icaroerasmo.enums.MessagesEnum;
-import com.icaroerasmo.messaging.DetectionEventPublisher;
-import com.icaroerasmo.model.FaceRecognition;
-import com.icaroerasmo.properties.CameraProperties;
-import com.icaroerasmo.properties.FaceRecognitionProperties;
-import com.icaroerasmo.properties.StreamsProperties;
-import com.icaroerasmo.properties.TrainingProperties;
+import com.icaroerasmo.detectors.movement.MovementAlertPolicy;
+import com.icaroerasmo.detectors.movement.MovementDetector;
+import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
 import com.icaroerasmo.detectors.person.services.FaceRecognitionService;
 import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
-import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
-import com.icaroerasmo.detectors.person.services.PeopleTrackingService;
-import com.icaroerasmo.service.TelegramPublisherService;
+import com.icaroerasmo.pipeline.CameraPipeline;
+import com.icaroerasmo.pipeline.RtspCameraStreamWorker;
+import com.icaroerasmo.properties.CameraProperties;
+import com.icaroerasmo.properties.StreamsProperties;
+import com.icaroerasmo.properties.TrainingProperties;
 import com.icaroerasmo.service.RtspFrameExtractorService;
-import com.icaroerasmo.detectors.person.PersonDetector;
-import com.icaroerasmo.utils.MatUtil;
+import com.icaroerasmo.service.TelegramPublisherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.bytedeco.opencv.opencv_core.Mat;
-import org.bytedeco.opencv.opencv_core.Rect;
 import org.jetbrains.annotations.NotNull;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
@@ -27,15 +23,9 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.stream.Collectors;
-
-import static com.icaroerasmo.utils.Constants.DESIRED_SCORE;
-import static com.icaroerasmo.utils.FaceHashUtils.computePerceptualHash;
-
 
 @Log4j2
 @Component
@@ -45,15 +35,21 @@ public class RtspRecognitionRunner {
     private final FaceRecognitionService faceRecognitionService;
     private final FaceRecognizerHolderService faceRecognizerHolderService;
     private final RtspFrameExtractorService rtspFrameExtractorService;
-    private final MatUtil matUtil;
     private final TelegramPublisherService telegramPublisherService;
-    private final PeopleTrackingService peopleTrackingService;
-    private final PersonDetector personDetector;
-    private final FaceRecognitionProperties faceRecognitionProperties;
     private final StreamsProperties streamsProperties;
     private final TrainingProperties trainingProperties;
-    private final DetectionEventPublisher detectionEventPublisher;
+    private final CameraPipeline cameraPipeline;
+    private final MovementDetector movementDetector;
+    @Qualifier("movementAlertPolicy")
+    private final MovementAlertPolicy movementAlertPolicy;
+    @Qualifier("petAlertPolicy")
+    private final MovementAlertPolicy petAlertPolicy;
 
+    /**
+     * Startup orchestration only. The per-camera reconnect/hibernate/backoff
+     * lifecycle and the per-frame pipeline live in {@link RtspCameraStreamWorker}
+     * and {@link CameraPipeline}.
+     */
     public void start(String... args) throws Exception {
 
         try {
@@ -65,7 +61,7 @@ public class RtspRecognitionRunner {
 
             List<CameraProperties> cameraProperties = streamsProperties.getCameras();
             if (cameraProperties == null || cameraProperties.isEmpty()) {
-                throw new IllegalStateException("No cameras configured under face-recognition.streams.cameras");
+                throw new IllegalStateException("No cameras configured under object-detection.streams.cameras");
             }
 
             // Create thread pool with one thread per camera
@@ -78,9 +74,15 @@ public class RtspRecognitionRunner {
                 }
 
                 // Submit camera processing task to executor
-                Future<?> future = executorService.submit(() -> {
-                    processCameraStream(camera);
-                });
+                Future<?> future = executorService.submit(new RtspCameraStreamWorker(
+                    camera,
+                    rtspFrameExtractorService,
+                    telegramPublisherService,
+                    cameraPipeline,
+                    movementDetector,
+                    movementAlertPolicy,
+                    petAlertPolicy
+                ));
                 futures.add(future);
             }
 
@@ -99,473 +101,6 @@ public class RtspRecognitionRunner {
             log.error("Error in RtspRecognitionRunner", e);
             throw e;
         }
-    }
-
-    private FaceRecognition getFaceRecognition(Mat img) {
-        // Get the current recognizer from the holder (thread-safe)
-        FaceRecognitionRuntime currentRecognizer = faceRecognizerHolderService.get();
-
-        if (currentRecognizer == null) {
-            log.warn("FaceRecognizer not initialized yet, skipping frame");
-            return null;
-        }
-
-        // STEP 2: Try to recognize faces in the frame
-        return faceRecognitionService.test(currentRecognizer, img);
-    }
-
-    /**
-     * Process a single camera stream with automatic reconnection
-     */
-    private void processCameraStream(CameraProperties cameraProperties) {
-        String cameraName = cameraProperties.getName() != null ? cameraProperties.getName() : "unknown";
-        String rtspUrl = cameraProperties.getUrl();
-
-        log.info("Starting recognition for camera '{}' with {} transport: {}", cameraName, cameraProperties.getProtocol(), rtspUrl);
-
-        // Infinite reconnection loop with hibernate mechanism
-        int reconnectAttempt = 0;
-        int consecutiveFailures = 0;
-        boolean connectionNotified = false; // Track if we've sent connection success notification
-        final int HIBERNATE_AFTER_FAILURES = 3;
-        final long HIBERNATE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
-
-        while (true) {
-            try {
-                if (reconnectAttempt > 0) {
-                    log.info("Reconnection attempt #{} for camera '{}'", reconnectAttempt, cameraName);
-
-                    // Send Telegram notification about reconnection attempt
-                    try {
-                        telegramPublisherService.sendTranslatedMessage(
-                            MessagesEnum.CAM_RECONNECTING, cameraName, reconnectAttempt
-                        );
-                    } catch (Exception e) {
-                        log.warn("Failed to send reconnection notification to Telegram: {}", e.getMessage());
-                    }
-                }
-
-                // Send initial connection notification before starting extraction
-                if (!connectionNotified) {
-                    try {
-                        telegramPublisherService.sendTranslatedMessage(
-                            MessagesEnum.CAM_CONNECTED, cameraName
-                        );
-                        log.info("Camera '{}': Connection established successfully", cameraName);
-                        connectionNotified = true;
-                    } catch (Exception e) {
-                        log.warn("Failed to send connection notification to Telegram: {}", e.getMessage());
-                    }
-                }
-
-                rtspFrameExtractorService.extract(rtspUrl, cameraProperties.getProtocol(), (img) -> {
-
-                    FaceRecognition faceRecognition = null;
-                    List<Rect> detectedPeople = List.of();
-
-                    try {
-
-                        if (img == null) {
-                            return;
-                        }
-
-                        // STEP 1: First detect if there are any people in the frame
-                        detectedPeople = personDetector.detect(img);
-
-                        if (detectedPeople.isEmpty()) {
-                            // No people detected at all - skip this frame
-                            return;
-                        }
-
-                        log.debug("Camera '{}': Detected {} person(s) in frame", cameraName, detectedPeople.size());
-
-                        if(faceRecognitionProperties.getEnabled()) {
-                            // STEP 2: Try to recognize faces in the frame
-                            faceRecognition = getFaceRecognition(img);
-
-                            if (faceRecognition == null) {
-                                return;
-                            }
-                        }
-
-                        List<FaceRecognition.DetectedFaces> faces =
-                                faceRecognition != null ? faceRecognition.getFaces() : null;
-
-                        // Publish low-latency presence event for the live-stream overlay (debounced)
-                        detectionEventPublisher.publishPresence(cameraName);
-
-                        // STEP 3: Check if faces were detected
-                        if (faces == null || faces.isEmpty()) {
-
-                            drawRectanglesOnPeople(img, cameraName, detectedPeople);
-
-                            return; // Don't continue processing if no faces detected
-                        }
-
-                    // Collect detected names with their distance scores
-                    Map<String, Double> detectedPeopleWithScores = faces.stream()
-                            .collect(Collectors.toMap(
-                                    FaceRecognition.DetectedFaces::getPersonName,
-                                    FaceRecognition.DetectedFaces::getDistance,
-                                    (existing, replacement) -> Math.min(existing, replacement) // Keep lowest distance if duplicate
-                            ));
-
-                    // Find the lowest distance score across all detections
-                    double lowestDistance = faces.stream()
-                            .mapToDouble(FaceRecognition.DetectedFaces::getDistance)
-                            .min()
-                            .orElse(DESIRED_SCORE);
-
-                    // FaceRecognitionService already applies its size-adaptive rejection threshold.
-                    String namesStr = String.join(", ", detectedPeopleWithScores.keySet());
-                    log.info("Pessoas detectadas em '{}': {} (lowest distance: {})",
-                            cameraName, namesStr, String.format("%.2f", lowestDistance));
-
-                    // Publish to Telegram with detected people information
-                    try {
-                            // Convert Mat to byte array WITHOUT drawing rectangles yet
-                            // Drawing will happen in PeopleTrackingService after person is tracked across frames
-                            org.bytedeco.javacpp.BytePointer buf = new org.bytedeco.javacpp.BytePointer();
-                            org.bytedeco.javacpp.BytePointer jpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
-                            org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExt, img, buf);
-                            byte[] imageBytes = new byte[(int) buf.limit()];
-                            buf.get(imageBytes);
-                            buf.deallocate();
-                            jpgExt.deallocate();
-
-                            // Keep annotations and tracking geometry based on full person detections.
-                            // Face rectangles vary sharply as people turn or approach the camera.
-                            List<PeopleTrackingService.PersonDetection> allPeopleDetections = detectedPeople.stream()
-                                .map(personRect -> new PeopleTrackingService.PersonDetection(
-                                    findIdentityForPerson(personRect, faces),
-                                    personRect
-                                ))
-                                .collect(Collectors.toList());
-
-                            // Track each detected face using its enclosing person's geometry.
-                            List<FaceRecognition.DetectedFaces> orderedFaces = faces.stream()
-                                .sorted(java.util.Comparator.comparingDouble(FaceRecognition.DetectedFaces::getDistance))
-                                .toList();
-                            List<Rect> trackedPersonRects = new ArrayList<>();
-
-                            for (int faceIdx = 0; faceIdx < orderedFaces.size(); faceIdx++) {
-                                FaceRecognition.DetectedFaces face = orderedFaces.get(faceIdx);
-
-                                Rect trackingRect = findPersonRectForFace(face.getFaceRect(), detectedPeople);
-                                if (trackingRect == null) {
-                                    log.warn("⚠️ SKIPPED: no tracking rectangle for face #{} in camera '{}'", faceIdx + 1, cameraName);
-                                    continue;
-                                }
-                                if (trackedPersonRects.stream().anyMatch(rect -> rect == trackingRect)) {
-                                    log.debug("Skipping additional face associated with an already tracked person rectangle");
-                                    continue;
-                                }
-                                trackedPersonRects.add(trackingRect);
-
-                                // Hash the full person crop in both recognized and no-face frames so
-                                // the visual signature remains comparable across the whole track.
-                                byte[] faceHash = null;
-                                if (trackingRect != null) {
-                                    org.bytedeco.javacpp.BytePointer faceBuf = null;
-                                    org.bytedeco.javacpp.BytePointer jpgExtFace = null;
-                                    Mat faceRegion = null;
-                                    try {
-                                        faceRegion = new Mat(img, trackingRect);
-
-                                        // Convert the person crop to bytes for visual matching.
-                                        faceBuf = new org.bytedeco.javacpp.BytePointer();
-                                        jpgExtFace = new org.bytedeco.javacpp.BytePointer(".jpg");
-                                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtFace, faceRegion, faceBuf);
-                                        byte[] encodedPerson = new byte[(int) faceBuf.limit()];
-                                        faceBuf.get(encodedPerson);
-                                        faceHash = computePerceptualHash(encodedPerson);
-                                    } catch (Exception e) {
-                                        log.warn("Failed to extract face region {} for camera '{}': {}",
-                                            faceIdx + 1, cameraName, e.getMessage());
-                                        continue; // Skip this face
-                                    } finally {
-                                        // Clean up resources
-                                        if (faceBuf != null) faceBuf.deallocate();
-                                        if (jpgExtFace != null) jpgExtFace.deallocate();
-                                        if (faceRegion != null) matUtil.releaseResources(faceRegion);
-                                    }
-                                }
-
-                                log.info("🔍 FRAME PROCESSING: camera='{}', face #{}, person='{}', distance={}, rect={}, faceHash={}, imageBytes={}",
-                                    cameraName,
-                                    faceIdx + 1,
-                                    face.getPersonName(),
-                                    String.format("%.2f", face.getDistance()),
-                                    (trackingRect != null),
-                                    (faceHash != null ? faceHash.length : 0),
-                                    (imageBytes != null ? imageBytes.length : 0));
-
-                                if (faceHash == null) {
-                                    log.warn("⚠️ SKIPPED: faceHash is null for face #{} in camera '{}'", faceIdx + 1, cameraName);
-                                    continue;
-                                }
-
-                                log.info("📊 CALLING TRACKING SERVICE: camera='{}', face #{}, person='{}'",
-                                    cameraName, faceIdx + 1, face.getPersonName());
-
-                                // Track this face with all people detections for drawing
-                                PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
-                                    cameraName,
-                                    face.getPersonName(), // This person's name
-                                    trackingRect,         // Stable full-person rectangle
-                                    faceHash,             // Full-person visual hash
-                                    face.getDistance(),   // This person's distance
-                                    imageBytes,           // Full frame image bytes
-                                    allPeopleDetections,  // ALL detected people with names and rectangles for drawing
-                                    true
-                                );
-
-                                log.info("📋 TRACKING RESULT: camera='{}', face #{}, shouldSend={}, personName={}, score={}",
-                                    cameraName,
-                                    faceIdx + 1,
-                                    trackingResult.isShouldSend(),
-                                    trackingResult.getPersonName(),
-                                    trackingResult.isShouldSend() ? String.format("%.2f", trackingResult.getBestDistance()) : "N/A");
-
-                                // When this person's tracking is ready, notification will have ALL faces highlighted
-                                if (trackingResult.isShouldSend()) {
-                                    log.info("✅ VERDICT REACHED! Face #{} tracked successfully - notification sent with {} faces highlighted for '{}'",
-                                        faceIdx + 1, allPeopleDetections.size(), trackingResult.getPersonName());
-                                } else {
-                                    log.debug("⏳ STILL TRACKING: camera='{}', face #{} not ready to send yet",
-                                        cameraName, faceIdx + 1);
-                                }
-                            }
-
-                            if (faces.isEmpty()) {
-                                log.debug("📭 NO FACES: Skipping frame from camera '{}'", cameraName);
-                            }
-
-                        } catch (Exception e) {
-                            log.error("Failed to publish detection to Telegram for camera '{}': {}", cameraName, e.getMessage(), e);
-                        }
-
-                    } catch (Exception e) {
-                        log.error("Error processing frame from camera '{}': {}", cameraName, e.getMessage(), e);
-                    } finally {
-                        try {
-                            matUtil.deallocateRects(detectedPeople);
-                            if (faceRecognition != null && faceRecognition.getFaces() != null) {
-                                matUtil.deallocateRects(faceRecognition.getFaces().stream()
-                                    .map(FaceRecognition.DetectedFaces::getFaceRect)
-                                    .toList());
-                            }
-                        } catch (Exception releaseEx) {
-                            log.warn("Error releasing native rectangles for camera '{}'", cameraName, releaseEx);
-                        }
-                    }
-                });
-
-                // If extract() returns normally, connection was lost
-                log.warn("Stream ended for camera '{}' - Connection may have been lost", cameraName);
-
-                // Reset connection notification flag so we can notify on successful reconnection
-                connectionNotified = false;
-
-                reconnectAttempt++;
-                consecutiveFailures++;
-
-            } catch (Exception e) {
-                connectionNotified = false; // Reset flag on error
-                reconnectAttempt++;
-                consecutiveFailures++;
-                log.error("Error with camera '{}' (attempt #{}): {}", cameraName, reconnectAttempt, e.getMessage());
-            }
-
-            // Check if we need to hibernate after 3 consecutive failures
-            if (consecutiveFailures >= HIBERNATE_AFTER_FAILURES) {
-                log.warn("Camera '{}': {} consecutive failures detected. Entering hibernate mode for {} minutes...",
-                    cameraName, HIBERNATE_AFTER_FAILURES, HIBERNATE_DURATION_MS / 60000);
-
-                // Send hibernate notification to Telegram
-                try {
-                    telegramPublisherService.sendTranslatedMessage(
-                        MessagesEnum.CAM_HIBERNATING, cameraName, HIBERNATE_AFTER_FAILURES
-                    );
-                } catch (Exception e) {
-                    log.warn("Failed to send hibernate notification to Telegram: {}", e.getMessage());
-                }
-
-                // Hibernate for 5 minutes
-                try {
-                    Thread.sleep(HIBERNATE_DURATION_MS);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    log.error("Camera '{}' hibernate interrupted", cameraName);
-                    return;
-                }
-
-                // Send wake-up notification
-                try {
-                    telegramPublisherService.sendTranslatedMessage(
-                        MessagesEnum.CAM_HIBERNATE_COMPLETE, cameraName
-                    );
-                } catch (Exception e) {
-                    log.warn("Failed to send wake-up notification to Telegram: {}", e.getMessage());
-                }
-
-                log.info("Camera '{}': Hibernate complete. Resuming connection attempts...", cameraName);
-
-                // Reset consecutive failures counter after hibernate
-                consecutiveFailures = 0;
-
-            } else {
-                // Normal exponential backoff (2s, 4s, 8s, 16s, max 30s)
-                long delayMs = Math.min(30000, 2000 * (long) Math.pow(2, Math.min(reconnectAttempt - 1, 4)));
-                log.info("Waiting {}ms before reconnecting camera '{}'...", delayMs, cameraName);
-
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    log.error("Camera '{}' reconnection interrupted", cameraName);
-                    return;
-                }
-            }
-        }
-    }
-
-    private void drawRectanglesOnPeople(Mat img, String cameraName, List<Rect> detectedPeople) {
-
-        if(faceRecognitionProperties.getEnabled()) {
-            // People detected but NO FACES - track ALL people individually
-            log.info("Camera '{}': {} people detected but no faces recognized - tracking all people",
-                    cameraName, detectedPeople.size());
-        } else {
-            log.info("Camera '{}': {} people detected (face recognition disabled) - tracking all people",
-                    cameraName, detectedPeople.size());
-        }
-
-        try {
-            // Convert full frame to byte array once (reused for all people)
-            byte[] fullFrameBytes = null;
-            org.bytedeco.javacpp.BytePointer frameBuf = null;
-            org.bytedeco.javacpp.BytePointer frameJpgExt = null;
-            try {
-                frameBuf = new org.bytedeco.javacpp.BytePointer();
-                frameJpgExt = new org.bytedeco.javacpp.BytePointer(".jpg");
-                org.bytedeco.opencv.global.opencv_imgcodecs.imencode(frameJpgExt, img, frameBuf);
-                fullFrameBytes = new byte[(int) frameBuf.limit()];
-                frameBuf.get(fullFrameBytes);
-            } catch (Exception e) {
-                log.warn("Failed to convert frame to bytes: {}", e.getMessage());
-            } finally {
-                if (frameBuf != null) frameBuf.deallocate();
-                if (frameJpgExt != null) frameJpgExt.deallocate();
-            }
-
-            if (fullFrameBytes != null) {
-                // Convert rectangles to PersonDetection objects (all unknown at this point)
-                List<PeopleTrackingService.PersonDetection> allPeopleDetections = detectedPeople.stream()
-                    .map(rect -> new PeopleTrackingService.PersonDetection("Unknown", rect))
-                    .collect(Collectors.toList());
-
-                // Track EACH person individually
-                for (int i = 0; i < detectedPeople.size(); i++) {
-                    Rect personRect = detectedPeople.get(i);
-
-                    // Extract person region for tracking
-                    byte[] personHash = null;
-                    org.bytedeco.javacpp.BytePointer personBuf = null;
-                    org.bytedeco.javacpp.BytePointer jpgExtPerson = null;
-                    Mat personRegion = null;
-                    try {
-                        personRegion = new Mat(img, personRect);
-                        personBuf = new org.bytedeco.javacpp.BytePointer();
-                        jpgExtPerson = new org.bytedeco.javacpp.BytePointer(".jpg");
-                        org.bytedeco.opencv.global.opencv_imgcodecs.imencode(jpgExtPerson, personRegion, personBuf);
-                        byte[] encodedPerson = new byte[(int) personBuf.limit()];
-                        personBuf.get(encodedPerson);
-                        personHash = computePerceptualHash(encodedPerson);
-                    } catch (Exception e) {
-                        log.warn("Failed to extract person region {}: {}", i + 1, e.getMessage());
-                        continue; // Skip this person
-                    } finally {
-                        if (personBuf != null) personBuf.deallocate();
-                        if (jpgExtPerson != null) jpgExtPerson.deallocate();
-                        if (personRegion != null) matUtil.releaseResources(personRegion);
-                    }
-
-                    // Track this person, passing ALL people detections for drawing
-                    if (personHash != null) {
-                        PeopleTrackingService.TrackingResult trackingResult = peopleTrackingService.trackFace(
-                                cameraName,
-                            "Unknown",
-                            personRect,
-                            personHash,
-                            DESIRED_SCORE, // High distance that it's unknown
-                            fullFrameBytes,
-                            allPeopleDetections, // Pass ALL detected people with names for drawing
-                            false
-                        );
-
-                        // When this person's tracking is ready, notification will have ALL people highlighted
-                        if (trackingResult.isShouldSend()) {
-                            log.info("Camera '{}': Person #{} tracked successfully - notification sent with {} people highlighted",
-                                    cameraName, i + 1, detectedPeople.size());
-                        } else {
-                            log.debug("Camera '{}': Still tracking person #{} (total {} people)",
-                                    cameraName, i + 1, detectedPeople.size());
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("Failed to process unknown people for camera '{}': {}", cameraName, e.getMessage(), e);
-        }
-    }
-
-    private String findIdentityForPerson(Rect personRect, List<FaceRecognition.DetectedFaces> faces) {
-        FaceRecognition.DetectedFaces bestFace = null;
-        double bestDistance = Double.MAX_VALUE;
-
-        for (FaceRecognition.DetectedFaces face : faces) {
-            if (face.getFaceRect() == null || !containsCenter(personRect, face.getFaceRect())) {
-                continue;
-            }
-            if (face.getDistance() < bestDistance) {
-                bestFace = face;
-                bestDistance = face.getDistance();
-            }
-        }
-
-        return bestFace != null ? bestFace.getPersonName() : "Unknown";
-    }
-
-    private Rect findPersonRectForFace(Rect faceRect, List<Rect> detectedPeople) {
-        if (faceRect == null) {
-            return null;
-        }
-
-        Rect bestMatch = null;
-        long smallestArea = Long.MAX_VALUE;
-        for (Rect personRect : detectedPeople) {
-            if (!containsCenter(personRect, faceRect)) {
-                continue;
-            }
-
-            long area = (long) personRect.width() * personRect.height();
-            if (area < smallestArea) {
-                bestMatch = personRect;
-                smallestArea = area;
-            }
-        }
-
-        return bestMatch != null ? bestMatch : faceRect;
-    }
-
-    private boolean containsCenter(Rect outerRect, Rect innerRect) {
-        int centerX = innerRect.x() + innerRect.width() / 2;
-        int centerY = innerRect.y() + innerRect.height() / 2;
-        return centerX >= outerRect.x()
-            && centerX <= outerRect.x() + outerRect.width()
-            && centerY >= outerRect.y()
-            && centerY <= outerRect.y() + outerRect.height();
     }
 
     @NotNull

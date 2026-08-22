@@ -23,7 +23,7 @@ spring:
   config:
     # Allow pointing to an external config folder via environment or system property
     # Example: -Dspring.config.additional-location=./config/
-    # We keep user-editable configs (face-recognition.*) in config.yaml there
+    # We keep user-editable configs (object-detection.*) in config.yaml there
     import: optional:config/ # will look for config/config.yaml by default
 
 logging:
