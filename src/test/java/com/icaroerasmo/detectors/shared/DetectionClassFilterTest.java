@@ -162,4 +162,24 @@ class DetectionClassFilterTest {
         double heavy = intersectionOverUnion(0, 0, 100, 100, 5, 5, 90, 90);
         assertTrue(shouldSuppress(heavy, 0.35));
     }
+
+    @Test
+    void personOverlapWithPetSuppressesDecision() {
+        // Person box identical to a dog box -> IoU 1.0 > 0.35 -> the person box is
+        // suppressed (the model misclassified the dog as person).
+        double identical = intersectionOverUnion(0, 0, 50, 50, 0, 0, 50, 50);
+        assertTrue(shouldSuppress(identical, 0.35));
+
+        // Person box disjoint from a cat box -> IoU 0 -> kept.
+        double disjoint = intersectionOverUnion(0, 0, 50, 50, 200, 200, 50, 50);
+        assertFalse(shouldSuppress(disjoint, 0.35));
+
+        // Light person/pet overlap (IoU 0.25 < 0.35) -> kept.
+        double light = intersectionOverUnion(0, 0, 100, 100, 25, 25, 50, 50);
+        assertFalse(shouldSuppress(light, 0.35));
+
+        // Strong person/pet overlap (IoU 0.81 > 0.35) -> suppressed.
+        double heavy = intersectionOverUnion(0, 0, 100, 100, 5, 5, 90, 90);
+        assertTrue(shouldSuppress(heavy, 0.35));
+    }
 }

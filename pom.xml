@@ -11,7 +11,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.icaroerasmo.com</groupId>
   <artifactId>rtsp-object-detection</artifactId>
-  <version>0.4.8</version>
+  <version>0.4.9</version>
   <name>object-detection</name>
   <url>http://maven.apache.org</url>
 

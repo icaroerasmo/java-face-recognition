@@ -20,8 +20,10 @@ import java.util.Set;
 /**
  * Service for detecting people using the shared SSD MobileNet model
  * ({@link MobileNetSsdDetector}). Person class 15 detections above the configured
- * confidence are kept; the existing car-7 overlap suppression and
- * {@code maxPersonAreaRatio} rejection are preserved exactly.
+ * confidence are kept; false-positive person boxes are suppressed when they overlap
+ * a car (class 7) or a dog/cat (class 16/17 - the model occasionally misclassifies
+ * a dog as person with higher confidence than dog), or when their area exceeds
+ * {@code maxPersonAreaRatio}.
  *
  * <p>The public {@link #detect} remains {@code synchronized} to guard the shared
  * model/net across cameras. Every DNN forward pass happens inside
@@ -34,10 +36,12 @@ import java.util.Set;
 public class PersonDetector implements IDetector {
 
     private static final double CAR_SUPPRESSION_IOU = 0.35;
+    private static final double PET_SUPPRESSION_IOU = 0.35;
 
     private final MobileNetSsdDetector mobileNetSsdDetector;
     private final double personConfidenceThreshold;
     private final double carConfidenceThreshold;
+    private final double petConfidenceThreshold;
     private final double maxPersonAreaRatio;
 
     public PersonDetector(
@@ -50,6 +54,8 @@ public class PersonDetector implements IDetector {
                 detection.getPersonConfidenceThreshold());
         this.carConfidenceThreshold = normalizeConfidenceThreshold(
                 detection.getCarConfidenceThreshold());
+        this.petConfidenceThreshold = normalizeConfidenceThreshold(
+                detection.getPet().getConfidenceThreshold());
         this.maxPersonAreaRatio = Math.max(0.0, Math.min(1.0,
                 detection.getMaxPersonAreaRatio()));
     }
@@ -71,6 +77,7 @@ public class PersonDetector implements IDetector {
 
         List<Rect> candidates = new ArrayList<>();
         List<CocoDetection> cars = new ArrayList<>();
+        List<CocoDetection> pets = new ArrayList<>();
         // Rects transferred to the returned list must NOT be released by the finally block.
         Set<Rect> returned = Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -78,10 +85,11 @@ public class PersonDetector implements IDetector {
             for (CocoDetection detection : detections) {
                 DetectionClassFilter.DetectionType type = DetectionClassFilter.classify(
                         detection.classId(), detection.confidence(),
-                        personConfidenceThreshold, carConfidenceThreshold, 0);
+                        personConfidenceThreshold, carConfidenceThreshold, petConfidenceThreshold);
                 switch (type) {
                     case PERSON -> candidates.add(detection.rect());
                     case CAR -> cars.add(detection);
+                    case PET -> pets.add(detection);
                     default -> { /* other classes ignored */ }
                 }
             }
@@ -92,7 +100,8 @@ public class PersonDetector implements IDetector {
 
             // Suppress false-positive person boxes:
             // 1. Person box overlapping a detected car box with IoU > CAR_SUPPRESSION_IOU
-            // 2. Person box whose area exceeds maxPersonAreaRatio of the frame area
+            // 2. Person box overlapping a detected dog/cat box with IoU > PET_SUPPRESSION_IOU
+            // 3. Person box whose area exceeds maxPersonAreaRatio of the frame area
             double frameArea = (double) originalWidth * originalHeight;
             List<Rect> survivors = new ArrayList<>(candidates.size());
             for (Rect person : candidates) {
@@ -105,8 +114,21 @@ public class PersonDetector implements IDetector {
                         }
                     }
                 }
+                if (!suppressed) {
+                    for (CocoDetection pet : pets) {
+                        Rect petRect = pet.rect();
+                        if (DetectionClassFilter.shouldSuppress(
+                                DetectionClassFilter.intersectionOverUnion(
+                                        person.x(), person.y(), person.width(), person.height(),
+                                        petRect.x(), petRect.y(), petRect.width(), petRect.height()),
+                                PET_SUPPRESSION_IOU)) {
+                            suppressed = true;
+                            break;
+                        }
+                    }
+                }
                 if (suppressed) {
-                    log.debug("Suppressing person box at ({}, {}) size {}x{} (car overlap or area exceeds {} of frame)",
+                    log.debug("Suppressing person box at ({}, {}) size {}x{} (car/pet overlap or area exceeds {} of frame)",
                             person.x(), person.y(), person.width(), person.height(),
                             String.format("%.2f", maxPersonAreaRatio));
                 } else {
@@ -122,7 +144,8 @@ public class PersonDetector implements IDetector {
             returned.clear();
             return new ArrayList<>();
         } finally {
-            // Release every rect that was not transferred to the caller.
+            // Release every rect that was not transferred to the caller (car, pet and
+            // suppressed-person rects are all released here, exactly once).
             for (CocoDetection detection : detections) {
                 Rect rect = detection.rect();
                 if (rect != null && !returned.contains(rect)) {
