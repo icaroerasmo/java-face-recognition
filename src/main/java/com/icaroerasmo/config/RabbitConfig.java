@@ -12,9 +12,12 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 @Log4j2
 @Configuration
+@EnableAsync
 public class RabbitConfig {
 
     public static final String TELEGRAM_EXCHANGE = "telegram.exchange";
@@ -26,6 +29,22 @@ public class RabbitConfig {
     public static final String DETECTION_EXCHANGE = "detection.exchange";
     public static final String DETECTION_QUEUE = "detection.events";
     public static final String DETECTION_ROUTING_KEY = "detection.events";
+
+    /**
+     * Async publisher pool used by the {@code @Async} publish methods so that
+     * Jackson serialization and the RabbitMQ socket write never block the
+     * frame-processing thread.
+     */
+    @Bean(name = "taskExecutor")
+    public ThreadPoolTaskExecutor taskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(200);
+        executor.setThreadNamePrefix("async-publish-");
+        executor.initialize();
+        return executor;
+    }
 
     @Bean
     public DirectExchange telegramExchange() {

@@ -5,6 +5,7 @@ import com.icaroerasmo.messaging.NotificationMessage.MediaType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.Arrays;
@@ -22,6 +23,7 @@ public class NotificationPublisher {
 
     private final RabbitTemplate rabbitTemplate;
 
+    @Async
     public void publishText(MessagesEnum template, Object... args) {
         List<String> stringArgs = args == null
                 ? List.of()
@@ -43,6 +45,7 @@ public class NotificationPublisher {
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
     }
 
+    @Async
     public void publishPhoto(NotificationMessage.CaptionSpec caption, byte[] payload) {
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
@@ -64,6 +67,7 @@ public class NotificationPublisher {
      * Publishes a PHOTO notification rendered from a message template (used as the
      * caption) plus template arguments. {@code rawHtml} and {@code caption} are null.
      */
+    @Async
     public void publishPhotoWithTemplate(MessagesEnum template, Object[] args, byte[] payload) {
         List<String> stringArgs = args == null
                 ? List.of()
@@ -86,6 +90,7 @@ public class NotificationPublisher {
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
     }
 
+    @Async
     public void publishAnimation(NotificationMessage.CaptionSpec caption, byte[] payload) {
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
