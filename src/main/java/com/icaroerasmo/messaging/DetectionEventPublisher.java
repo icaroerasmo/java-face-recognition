@@ -4,7 +4,6 @@ import com.icaroerasmo.enums.MessagesEnum;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -28,7 +27,6 @@ public class DetectionEventPublisher {
     private final Map<String, Long> lastMovementPublish = new ConcurrentHashMap<>();
     private final Map<String, Long> lastPetPublish = new ConcurrentHashMap<>();
 
-    @Async
     public void publish(String cameraName, MessagesEnum template, List<String> args) {
         DetectionEvent event = new DetectionEvent(
                 UUID.randomUUID().toString(),
@@ -49,7 +47,6 @@ public class DetectionEventPublisher {
      * so the live-stream overlay appears as soon as a person is detected
      * (without waiting for the multi-frame tracking verdict).
      */
-    @Async
     public void publishPresence(String cameraName) {
         publishDebounced(cameraName, PRESENCE_DEBOUNCE_MS, MessagesEnum.PERSON_DETECTED, lastPresencePublish);
     }
@@ -58,7 +55,6 @@ public class DetectionEventPublisher {
      * Publishes a {@code MOVEMENT_DETECTED} overlay event, atomically debounced per
      * camera with the given window.
      */
-    @Async
     public void publishMovement(String cameraName, long debounceMs) {
         publishDebounced(cameraName, debounceMs, MessagesEnum.MOVEMENT_DETECTED, lastMovementPublish);
     }
@@ -67,7 +63,6 @@ public class DetectionEventPublisher {
      * Publishes a {@code PET_DETECTED} overlay event, atomically debounced per
      * camera with the given window.
      */
-    @Async
     public void publishPet(String cameraName, long debounceMs) {
         publishDebounced(cameraName, debounceMs, MessagesEnum.PET_DETECTED, lastPetPublish);
     }
