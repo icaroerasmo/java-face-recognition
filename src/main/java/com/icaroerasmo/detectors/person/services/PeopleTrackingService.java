@@ -35,7 +35,7 @@ public class PeopleTrackingService {
 
     private static final String UNKNOWN_IDENTITY = "Unknown";
     private static final int GIF_FRAME_MAX_WIDTH = 640;
-    private static final int MIN_KNOWN_FRAMES_FOR_IDENTITY = 3;
+    private static final int MIN_KNOWN_FRAMES_FOR_IDENTITY = 1;
 
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
@@ -919,8 +919,19 @@ public class PeopleTrackingService {
             // Store confirmed identity before clearing
             this.confirmedIdentity = identity;
 
-            // Clear old observations (keep last 2 for position matching)
+            // Clear old observations (keep last 2 for position matching).
+            // Deallocate the dropped observations' native rects to avoid a native
+            // memory leak on every track finalization.
             int keepCount = Math.min(2, observations.size());
+            List<FaceObservation> dropped = new ArrayList<>(
+                observations.subList(0, Math.max(0, observations.size() - keepCount))
+            );
+            for (FaceObservation observation : dropped) {
+                if (observation.rect != null) {
+                    observation.rect.deallocate();
+                }
+                releasePersonDetections(observation.allPeople);
+            }
             if (keepCount > 0) {
                 List<FaceObservation> recentObservations = new ArrayList<>(
                     observations.subList(observations.size() - keepCount, observations.size())
@@ -1364,7 +1375,9 @@ public class PeopleTrackingService {
     }
 
     private int getMinTrackingFrames() {
-        return Math.max(5, streamsProperties.getProcessingFps() * 5);
+        // Small minimum (~0.5s at the configured processing fps) so recognition is
+        // not gated behind a large frame count. Must stay below getMaxTrackingFrames().
+        return Math.max(2, streamsProperties.getProcessingFps() / 2);
     }
 
     private int getMaxTrackingFrames() {

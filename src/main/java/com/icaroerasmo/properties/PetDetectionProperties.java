@@ -17,8 +17,9 @@ public class PetDetectionProperties {
 
     /**
      * Minimum confidence required for a dog/cat detection.
+     * Raised from 0.5 to 0.7 to reduce people being misclassified as pets.
      */
-    private double confidenceThreshold = 0.5;
+    private double confidenceThreshold = 0.7;
 
     /**
      * Minimum confidence required for a potted-plant detection (COCO class 58).
