@@ -135,6 +135,18 @@ public class PeopleTrackingService {
                     return;
                 }
 
+                // A continued track that was already finalized and reset carries no
+                // image data until the person is detected again. If the timeout fires
+                // without new image data there is nothing to send - clean up instead
+                // of looping with an empty notification.
+                byte[] bestImageBytes = track.getBestImageBytes();
+                if (bestImageBytes == null || bestImageBytes.length == 0) {
+                    log.debug("Camera '{}': timeout notification has no image data - cleaning up continued track", cameraName);
+                    cameraTrackedPeople.remove(track);
+                    track.cleanup();
+                    return;
+                }
+
                 int frameCount = track.observations.size();
                 long trackingDuration = System.currentTimeMillis() - track.firstSeen;
                 double distanceMoved = track.getTotalDistanceMoved();
@@ -162,7 +174,6 @@ public class PeopleTrackingService {
                 // Get best frame data
                 byte[] bestFaceHash = track.getBestFaceHash();
                 double bestScore = track.getBestDistance();
-                byte[] bestImageBytes = track.getBestImageBytes();
                 List<PersonDetection> bestAllPeople = track.getBestAllPeople();
                 List<byte[]> allFrameImages = track.getAllFrameImages();
 
