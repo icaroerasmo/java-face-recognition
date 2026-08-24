@@ -50,8 +50,9 @@ public class PeopleTrackingStage implements FrameStage {
         List<FaceRecognition.DetectedFaces> faces =
                 ctx.getFaceRecognition() != null ? ctx.getFaceRecognition().getFaces() : null;
 
-        // Publish low-latency presence event for the live-stream overlay (debounced)
-        detectionEventPublisher.publishPresence(cameraName);
+        // The low-latency "person present" presence event is now published by
+        // PersonDetectionStage (right after person detection), so it no longer waits
+        // for face recognition here.
 
         // STEP 3: Check if faces were detected
         if (faces == null || faces.isEmpty()) {

@@ -96,7 +96,7 @@ public abstract class CameraStreamWorker implements Runnable {
 
                 onStreamConnect();
 
-                rtspFrameExtractorService.extract(rtspUrl, transportProtocol(), this::processFrame);
+                rtspFrameExtractorService.extract(cameraName(), rtspUrl, transportProtocol(), this::processFrame);
 
                 // If extract() returns normally, connection was lost
                 log.warn("Stream ended for camera '{}' - Connection may have been lost", cameraName);

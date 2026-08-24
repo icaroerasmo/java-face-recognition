@@ -1,6 +1,6 @@
 package com.icaroerasmo.pipeline;
 
-import com.icaroerasmo.detectors.movement.MovementDetector;
+import com.icaroerasmo.detectors.movement.MovementResultStore;
 import com.icaroerasmo.pipeline.stages.FaceRecognitionStage;
 import com.icaroerasmo.pipeline.stages.MovementAlertStage;
 import com.icaroerasmo.pipeline.stages.PeopleTrackingStage;
@@ -38,7 +38,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class CameraPipeline {
 
-    private final MovementDetector movementDetector;
+    private final MovementResultStore movementResultStore;
     private final PersonDetectionStage personDetectionStage;
     private final PetDetectionStage petDetectionStage;
     private final MovementAlertStage movementAlertStage;
@@ -50,10 +50,11 @@ public class CameraPipeline {
         boolean movementEnabled = objectDetectionProperties.getDetection().getMovement().isEnabled();
         boolean petEnabled = objectDetectionProperties.getDetection().getPet().isEnabled();
 
-        // 1. Movement computation (state kept even when people are present; alerts suppressed by priority)
+        // 1. Movement state: read the verdict produced at a high rate by the producer
+        //    (MovementResultStore), so movement alerts are not delayed by the DNN.
         if (movementEnabled) {
             try {
-                ctx.setMovementDetected(movementDetector.detect(ctx.getCameraName(), ctx.getFrame()));
+                ctx.setMovementDetected(movementResultStore.isMovementRecent(ctx.getCameraName()));
             } catch (Exception e) {
                 log.error("Movement detection failed for camera '{}': {}", ctx.getCameraName(), e.getMessage(), e);
                 ctx.setMovementDetected(false);

@@ -40,6 +40,13 @@ public class StreamsProperties {
     private int processingWidth = 0;
 
     /**
+     * Rate (frames per second) at which the cheap frame-differencing movement
+     * detection runs in the producer, decoupled from the slower DNN
+     * {@link #processingFps}. Higher values give faster movement triggers.
+     */
+    private int movementFps = 10;
+
+    /**
      * Maximum number of frames retained in a single tracking session before it is finalized.
      * This caps memory growth for long-lived tracks.
      */

@@ -2,6 +2,7 @@ package com.icaroerasmo.pipeline;
 
 import com.icaroerasmo.detectors.movement.MovementAlertPolicy;
 import com.icaroerasmo.detectors.movement.MovementDetector;
+import com.icaroerasmo.detectors.movement.MovementResultStore;
 import com.icaroerasmo.properties.CameraProperties;
 import com.icaroerasmo.service.RtspFrameExtractorService;
 import com.icaroerasmo.service.TelegramPublisherService;
@@ -20,6 +21,7 @@ public class RtspCameraStreamWorker extends CameraStreamWorker {
     private final CameraProperties cameraProperties;
     private final CameraPipeline cameraPipeline;
     private final MovementDetector movementDetector;
+    private final MovementResultStore movementResultStore;
     private final MovementAlertPolicy movementAlertPolicy;
     private final MovementAlertPolicy petAlertPolicy;
 
@@ -29,6 +31,7 @@ public class RtspCameraStreamWorker extends CameraStreamWorker {
             TelegramPublisherService telegramPublisherService,
             CameraPipeline cameraPipeline,
             MovementDetector movementDetector,
+            MovementResultStore movementResultStore,
             @Qualifier("movementAlertPolicy") MovementAlertPolicy movementAlertPolicy,
             @Qualifier("petAlertPolicy") MovementAlertPolicy petAlertPolicy
     ) {
@@ -36,6 +39,7 @@ public class RtspCameraStreamWorker extends CameraStreamWorker {
         this.cameraProperties = cameraProperties;
         this.cameraPipeline = cameraPipeline;
         this.movementDetector = movementDetector;
+        this.movementResultStore = movementResultStore;
         this.movementAlertPolicy = movementAlertPolicy;
         this.petAlertPolicy = petAlertPolicy;
     }
@@ -64,6 +68,7 @@ public class RtspCameraStreamWorker extends CameraStreamWorker {
     protected void onStreamConnect() {
         String camera = cameraName();
         movementDetector.reset(camera);
+        movementResultStore.reset(camera);
         movementAlertPolicy.reset(camera);
         petAlertPolicy.reset(camera);
     }
