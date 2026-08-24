@@ -9,6 +9,7 @@ import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.OpenCVFrameConverter;
 import org.bytedeco.opencv.opencv_core.Mat;
+import org.bytedeco.opencv.opencv_core.Size;
 import org.springframework.stereotype.Service;
 
 import java.nio.ByteBuffer;
@@ -24,6 +25,8 @@ import static org.bytedeco.ffmpeg.global.avutil.av_log_set_level;
 import static org.bytedeco.opencv.global.opencv_core.CV_8UC1;
 import static org.bytedeco.opencv.global.opencv_core.CV_8UC3;
 import static org.bytedeco.opencv.global.opencv_core.CV_8UC4;
+import static org.bytedeco.opencv.global.opencv_imgproc.INTER_LINEAR;
+import static org.bytedeco.opencv.global.opencv_imgproc.resize;
 
 @Log4j2
 @Service
@@ -34,6 +37,11 @@ public class RtspFrameExtractorService {
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
+
+    // Full HD (1920x1080) BGR frame size in bytes (~6.2 MB). Reference unit used to
+    // size the frame buffer so a single camera's buffer holds `frameQueueCapacity`
+    // full-HD frames, and the total buffer scales with the number of cameras.
+    private static final int FULL_HD_FRAME_BYTES = 1920 * 1080 * 3;
 
     /**
      * Frame data stored as byte array to prevent native memory leaks
@@ -231,7 +239,7 @@ public class RtspFrameExtractorService {
     private void processFramesWithQueue(FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
                                        String rtspUrl, Consumer<Mat> consumer) throws Exception {
         // Create bounded queue - one per camera stream
-        final int queueCapacity = Math.max(1, streamsProperties.getFrameQueueCapacity());
+        final int queueCapacity = computeFrameQueueCapacity();
         final int processingFps = Math.max(1, streamsProperties.getProcessingFps());
         final long minFrameIntervalNs = TimeUnit.SECONDS.toNanos(1) / processingFps;
         BlockingQueue<FrameData> frameQueue = new ArrayBlockingQueue<>(queueCapacity);
@@ -242,15 +250,17 @@ public class RtspFrameExtractorService {
         Thread producer = new Thread(() -> {
             int nullFrameCount = 0;
             final int maxNullFrames = Math.max(1, streamsProperties.getMaxConsecutiveNullFrames());
+            final int processingWidth = Math.max(0, streamsProperties.getProcessingWidth());
             long lastQueuedAtNs = 0;
 
             try {
-                log.info("Frame producer started for: {} (processingFps={}, queueCapacity={})",
-                        rtspUrl, processingFps, queueCapacity);
+                log.info("Frame producer started for: {} (processingFps={}, queueCapacity={}, processingWidth={})",
+                        rtspUrl, processingFps, queueCapacity, processingWidth);
 
                 while (!shouldStop.get() && !Thread.currentThread().isInterrupted()) {
                     Frame frame = null;
                     Mat mat = null;
+                    Mat resizedMat = null;
 
                     try {
                         frame = grabber.grabImage();
@@ -273,6 +283,15 @@ public class RtspFrameExtractorService {
                             continue;
                         }
 
+                        // Throttle BEFORE the expensive convert/grey-check so we only pay
+                        // that CPU cost at the configured processing-fps (not the grab
+                        // rate), freeing CPU for the detection pipeline.
+                        long nowNs = System.nanoTime();
+                        if (nowNs - lastQueuedAtNs < minFrameIntervalNs) {
+                            continue;
+                        }
+                        lastQueuedAtNs = nowNs;
+
                         // Convert Frame to Mat
                         mat = converter.convert(frame);
                         if (mat == null || mat.empty()) {
@@ -281,40 +300,38 @@ public class RtspFrameExtractorService {
 
                         // Validate Mat
                         if (mat.cols() <= 0 || mat.rows() <= 0 || mat.data() == null || mat.data().isNull()) {
-                            try { mat.release(); } catch (Exception ignore) {}
                             continue;
+                        }
+
+                        // Downscale to the configured processing width (if enabled and the
+                        // source is wider). Reduces memory and speeds up the detection pipeline.
+                        Mat frameMat = mat;
+                        if (processingWidth > 0 && mat.cols() > processingWidth) {
+                            int scaledHeight = Math.max(1, (int) Math.round(
+                                mat.rows() * ((double) processingWidth / mat.cols())));
+                            resizedMat = new Mat();
+                            resize(mat, resizedMat, new Size(processingWidth, scaledHeight), 0, 0, INTER_LINEAR);
+                            frameMat = resizedMat;
                         }
 
                         // Skip grey/blank frames
-                        if (isGreyFrame(mat)) {
-                            try { mat.release(); } catch (Exception ignore) {}
+                        if (isGreyFrame(frameMat)) {
                             continue;
                         }
-
-                        long nowNs = System.nanoTime();
-                        if (nowNs - lastQueuedAtNs < minFrameIntervalNs) {
-                            try { mat.release(); } catch (Exception ignore) {}
-                            continue;
-                        }
-                        lastQueuedAtNs = nowNs;
 
                         // Convert Mat to byte array - THIS PREVENTS MEMORY LEAKS
-                        int width = mat.cols();
-                        int height = mat.rows();
-                        int channels = mat.channels();
+                        int width = frameMat.cols();
+                        int height = frameMat.rows();
+                        int channels = frameMat.channels();
                         int totalBytes = width * height * channels;
 
                         byte[] frameBytes = new byte[totalBytes];
 
                         // Get buffer and ensure it's positioned correctly
-                        ByteBuffer buffer = mat.data().capacity(totalBytes).asByteBuffer();
+                        ByteBuffer buffer = frameMat.data().capacity(totalBytes).asByteBuffer();
                         buffer.position(0);
                         buffer.limit(totalBytes);
                         buffer.get(frameBytes, 0, totalBytes);
-
-                        // Release Mat immediately after copying to byte array
-                        try { mat.release(); } catch (Exception ignore) {}
-                        mat = null;
 
                         // Store byte array in queue
                         FrameData frameData = new FrameData(frameBytes, width, height, channels);
@@ -330,10 +347,13 @@ public class RtspFrameExtractorService {
 
                     } catch (Exception e) {
                         log.error("Error in producer for {}: {}", rtspUrl, e.getMessage(), e);
+                    } finally {
+                        if (resizedMat != null) {
+                            try { resizedMat.release(); } catch (Exception ignore) {}
+                        }
                         if (mat != null) {
                             try { mat.release(); } catch (Exception ignore) {}
                         }
-                    } finally {
                         if (frame != null) {
                             try { frame.close(); } catch (Exception ignore) {}
                         }
@@ -436,6 +456,33 @@ public class RtspFrameExtractorService {
                 log.warn("Error closing converter: {}", e.getMessage());
             }
         }
+    }
+
+    /**
+     * Computes the per-camera frame queue capacity so the buffer scales with the
+     * number of cameras.
+     *
+     * <p>A single camera's buffer is sized to hold {@code frameQueueCapacity} full-HD
+     * frames ({@code FULL_HD_FRAME_BYTES} bytes each, ~6.2 MB). That per-camera value
+     * is then multiplied by the number of configured cameras, so the frame buffer
+     * grows proportionally as cameras are added:
+     *
+     * <pre>queueCapacity = frameQueueCapacity * cameraCount</pre>
+     */
+    private int computeFrameQueueCapacity() {
+        int framesPerCamera = Math.max(1, streamsProperties.getFrameQueueCapacity());
+        int cameraCount = Math.max(1, streamsProperties.getCameras().size());
+
+        int queueCapacity = framesPerCamera * cameraCount;
+
+        long perQueueBytes = (long) FULL_HD_FRAME_BYTES * queueCapacity;
+        long totalBufferBytes = perQueueBytes * cameraCount;
+
+        log.info("Frame buffer sizing: {} full-HD frame(s)/camera x {} cameras = {} frame(s)/queue (~{} MB/queue, ~{} MB total)",
+            framesPerCamera, cameraCount, queueCapacity,
+            perQueueBytes / (1024 * 1024), totalBufferBytes / (1024 * 1024));
+
+        return queueCapacity;
     }
 
     private int resolveMatType(int channels) {

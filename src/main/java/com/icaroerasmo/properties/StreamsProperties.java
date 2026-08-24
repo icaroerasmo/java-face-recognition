@@ -32,6 +32,14 @@ public class StreamsProperties {
     private int frameQueueCapacity = 10;
 
     /**
+     * Optional downscale width applied to frames before they are queued for
+     * processing. 0 = keep the native stream resolution. A value like 960 or 640
+     * reduces memory and speeds up the detection pipeline at the cost of some
+     * detail (mainly affecting recognition of small/distant faces).
+     */
+    private int processingWidth = 0;
+
+    /**
      * Maximum number of frames retained in a single tracking session before it is finalized.
      * This caps memory growth for long-lived tracks.
      */
