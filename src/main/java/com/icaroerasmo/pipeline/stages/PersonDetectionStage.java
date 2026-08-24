@@ -25,12 +25,11 @@ import java.util.List;
 public class PersonDetectionStage implements FrameStage {
 
     private final PersonDetector personDetector;
-    private final DetectionEventPublisher detectionEventPublisher;
 
     @Override
     public void process(FrameContext ctx) {
         // STEP 1: First detect if there are any people in the frame
-        List<Rect> detectedPeople = personDetector.detect(ctx.getFrame());
+        List<Rect> detectedPeople = personDetector.detect(ctx);
         ctx.setDetectedPeople(detectedPeople);
 
         if (detectedPeople.isEmpty()) {
@@ -38,9 +37,6 @@ public class PersonDetectionStage implements FrameStage {
             ctx.markProcessingComplete();
             return;
         }
-
-        // Publish the low-latency presence event immediately (before face recognition).
-        detectionEventPublisher.publishPresence(ctx.getCameraName());
 
         log.debug("Camera '{}': Detected {} person(s) in frame", ctx.getCameraName(), detectedPeople.size());
     }

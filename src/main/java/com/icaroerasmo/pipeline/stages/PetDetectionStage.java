@@ -3,7 +3,6 @@ package com.icaroerasmo.pipeline.stages;
 import com.icaroerasmo.detectors.movement.MovementAlertPolicy;
 import com.icaroerasmo.detectors.pet.PetDetection;
 import com.icaroerasmo.detectors.pet.PetDetector;
-import com.icaroerasmo.messaging.DetectionEventPublisher;
 import com.icaroerasmo.pipeline.FrameContext;
 import com.icaroerasmo.processing.FrameEncodingService;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
@@ -35,7 +34,6 @@ public class PetDetectionStage {
     private final MatUtil matUtil;
     private final FrameEncodingService frameEncodingService;
     private final TelegramPublisherService telegramPublisherService;
-    private final DetectionEventPublisher detectionEventPublisher;
     @Qualifier("petAlertPolicy")
     private final MovementAlertPolicy petAlertPolicy;
     private final ObjectDetectionProperties objectDetectionProperties;
@@ -47,18 +45,13 @@ public class PetDetectionStage {
     public boolean publishPetAlert(FrameContext ctx) {
         PetDetectionProperties petProperties = objectDetectionProperties.getDetection().getPet();
         String cameraName = ctx.getCameraName();
-        List<PetDetection> pets = petDetector.detect(ctx.getFrame());
+        List<PetDetection> pets = petDetector.detect(ctx);
         if (pets.isEmpty()) {
             return false;
         }
 
         long now = System.currentTimeMillis();
         try {
-            // Overlay detection event (debounced per camera).
-            if (petAlertPolicy.shouldPublish(cameraName, now, petProperties.getDebounceMs())) {
-                detectionEventPublisher.publishPet(cameraName, petProperties.getDebounceMs());
-            }
-
             // Telegram photo (throttled per camera).
             if (petAlertPolicy.shouldSendTelegram(cameraName, now, petProperties.getTelegramThrottleMs())) {
                 Mat annotated = null;

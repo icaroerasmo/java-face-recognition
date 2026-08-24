@@ -3,6 +3,8 @@ package com.icaroerasmo.detectors.pet;
 import com.icaroerasmo.detectors.shared.CocoDetection;
 import com.icaroerasmo.detectors.shared.DetectionClassFilter;
 import com.icaroerasmo.detectors.shared.YoloDetector;
+import com.icaroerasmo.messaging.DetectionEventPublisher;
+import com.icaroerasmo.pipeline.FrameContext;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
 import lombok.extern.log4j.Log4j2;
 import org.bytedeco.opencv.opencv_core.Mat;
@@ -41,19 +43,23 @@ public class PetDetector {
     private final double petConfidenceThreshold;
     private final double plantConfidenceThreshold;
     private final double plantSuppressionIou;
+    private final DetectionEventPublisher detectionEventPublisher;
 
     public PetDetector(
             YoloDetector yoloDetector,
-            ObjectDetectionProperties objectDetectionProperties
+            ObjectDetectionProperties objectDetectionProperties,
+            DetectionEventPublisher detectionEventPublisher
     ) {
         this.yoloDetector = yoloDetector;
         var pet = objectDetectionProperties.getDetection().getPet();
         this.petConfidenceThreshold = clamp01(pet.getConfidenceThreshold());
         this.plantConfidenceThreshold = clamp01(pet.getPlantConfidenceThreshold());
         this.plantSuppressionIou = clamp01(pet.getPlantSuppressionIou());
+        this.detectionEventPublisher = detectionEventPublisher;
     }
 
-    public synchronized List<PetDetection> detect(Mat image) {
+    public synchronized List<PetDetection> detect(FrameContext frameCtx) {
+        Mat image = frameCtx.getFrame();
         List<CocoDetection> detections = yoloDetector.detectRaw(image);
         if (detections.isEmpty()) {
             return List.of();
@@ -80,6 +86,9 @@ public class PetDetector {
             if (petCandidates.isEmpty()) {
                 return List.of();
             }
+
+            detectionEventPublisher.publishPet(frameCtx.getCameraName());
+            log.debug("Detected pet(s) in image for camera '{}'", frameCtx.getCameraName());
 
             List<PetDetection> pets = new ArrayList<>(petCandidates.size());
             for (CocoDetection candidate : petCandidates) {

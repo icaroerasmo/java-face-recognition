@@ -4,6 +4,8 @@ import com.icaroerasmo.detectors.IDetector;
 import com.icaroerasmo.detectors.shared.CocoDetection;
 import com.icaroerasmo.detectors.shared.DetectionClassFilter;
 import com.icaroerasmo.detectors.shared.YoloDetector;
+import com.icaroerasmo.messaging.DetectionEventPublisher;
+import com.icaroerasmo.pipeline.FrameContext;
 import com.icaroerasmo.properties.DetectionProperties;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
 import lombok.extern.log4j.Log4j2;
@@ -43,10 +45,12 @@ public class PersonDetector implements IDetector {
     private final double carConfidenceThreshold;
     private final double petConfidenceThreshold;
     private final double maxPersonAreaRatio;
+    private final DetectionEventPublisher detectionEventPublisher;
 
     public PersonDetector(
             YoloDetector yoloDetector,
-            ObjectDetectionProperties objectDetectionProperties
+            ObjectDetectionProperties objectDetectionProperties,
+            DetectionEventPublisher detectionEventPublisher
     ) {
         this.yoloDetector = yoloDetector;
         DetectionProperties detection = objectDetectionProperties.getDetection();
@@ -58,10 +62,12 @@ public class PersonDetector implements IDetector {
                 detection.getPet().getConfidenceThreshold());
         this.maxPersonAreaRatio = Math.max(0.0, Math.min(1.0,
                 detection.getMaxPersonAreaRatio()));
+        this.detectionEventPublisher = detectionEventPublisher;
     }
 
     @Override
-    public synchronized List<Rect> detect(Mat image) {
+    public synchronized List<Rect> detect(FrameContext frameCtx) {
+        Mat image = frameCtx.getFrame();
         if (image == null || image.empty()) {
             log.warn("Cannot detect people in null or empty image");
             return new ArrayList<>();
@@ -95,7 +101,13 @@ public class PersonDetector implements IDetector {
             }
 
             if (!candidates.isEmpty()) {
+                detectionEventPublisher.publishPresence(frameCtx.getCameraName());
                 log.debug("Detected {} person(s) in image", candidates.size());
+            }
+
+            if (!cars.isEmpty()) {
+                detectionEventPublisher.publishCar(frameCtx.getCameraName());
+                log.debug("Detected {} car(s) in image", cars.size());
             }
 
             // Suppress false-positive person boxes:
