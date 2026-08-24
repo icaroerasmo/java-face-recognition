@@ -38,6 +38,13 @@ public class StreamsProperties {
     private int trackingMaxFrames = 30;
 
     /**
+     * Minimum number of frames a known identity must be observed before it is
+     * confirmed as that person. 1 = recognize on the first frame (fastest);
+     * raise this if identity flicker becomes a problem.
+     */
+    private int identityMinFrames = 1;
+
+    /**
      * Maximum number of consecutive null image reads before the extractor reconnects the stream.
      * Higher values tolerate brief RTSP stalls on heavier streams.
      */

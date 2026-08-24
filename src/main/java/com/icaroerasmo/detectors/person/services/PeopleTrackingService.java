@@ -35,7 +35,6 @@ public class PeopleTrackingService {
 
     private static final String UNKNOWN_IDENTITY = "Unknown";
     private static final int GIF_FRAME_MAX_WIDTH = 640;
-    private static final int MIN_KNOWN_FRAMES_FOR_IDENTITY = 1;
 
     private final TelegramPublisherService telegramPublisherService;
     private final DetectionHistoryService detectionHistoryService;
@@ -145,11 +144,14 @@ public class PeopleTrackingService {
                 String determinedIdentity = identityResult.getPersonName();
                 int identityFrameCount = identityResult.getFrameCount();
 
-                // Use confirmed identity if available and valid, otherwise use computed identity
+                // Only fall back to the confirmed identity when the current face is
+                // unknown/absent (e.g. person turned around). A freshly recognized
+                // known identity is authoritative and must not be overwritten.
                 String confirmedIdentity = track.getConfirmedIdentity();
-                if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)) {
-                    log.debug("Using confirmed identity '{}' instead of computed '{}' for timeout notification",
-                        confirmedIdentity, determinedIdentity);
+                if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)
+                        && isUnknownIdentity(determinedIdentity)) {
+                    log.debug("Using confirmed identity '{}' for timeout notification (current face unknown)",
+                        confirmedIdentity);
                     determinedIdentity = confirmedIdentity;
                     identityFrameCount = frameCount; // Use all frames since identity is confirmed
                 }
@@ -613,6 +615,17 @@ public class PeopleTrackingService {
                 continue; // Person moved too far
             }
 
+            // HARD SPLIT: never merge a DIFFERENT known person into an existing known
+            // track. Two people standing close together must produce separate tracks
+            // (e.g. someone stepping in front of another person).
+            String trackKnownIdentity = resolveTrackKnownIdentity(track);
+            if (trackKnownIdentity != null && !isUnknownIdentity(personName)
+                    && !trackKnownIdentity.equals(personName)) {
+                log.info("🔀 SPLIT: track identity '{}' != incoming '{}' at ({}, {}) - treating as separate person",
+                    trackKnownIdentity, personName, faceRect.x(), faceRect.y());
+                continue;
+            }
+
             // Check if this track has a confirmed identity from a previous finalization
             String confirmedIdentity = track.getConfirmedIdentity();
             boolean hasConfirmedIdentity = confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity);
@@ -659,20 +672,6 @@ public class PeopleTrackingService {
                 lastRect.x(), lastRect.y(), similarity, adaptiveSimilarityThreshold,
                 (int)distance, timeSinceLastSeen, confirmedIdentity);
 
-            // SAFEGUARD: Reset confirmed identity ONLY if a DIFFERENT known person appears
-            // This prevents different people from inheriting identity when appearing in similar positions
-            // BUT does NOT reset when face is obscured/unknown (same person lowering face)
-            if (hasConfirmedIdentity && similarity > 50 && !isUnknownIdentity(personName) && !personName.equals(confirmedIdentity)) {
-                log.info("🔄 IDENTITY RESET: Track at ({}, {}) had confirmed identity '{}' but detected different person '{}' (similarity: {}). Resetting identity.",
-                    lastRect.x(), lastRect.y(), confirmedIdentity, personName, similarity);
-                track.resetTrack(null, currentTime);
-                // Continue to normal matching logic without the confirmed identity advantage
-                hasConfirmedIdentity = false;
-                confirmedIdentity = null;
-                // Reset adaptive threshold to base value
-                adaptiveSimilarityThreshold = TRACKING_SIMILARITY_THRESHOLD;
-            }
-
             if (similarity <= adaptiveSimilarityThreshold) {
                 log.info("✅ MATCHED: Person at ({}, {}) matched to existing track (similarity: {}, distance: {}px, track age: {}ms, confirmedIdentity: {})",
                     faceRect.x(), faceRect.y(), similarity, (int)distance, trackDuration, confirmedIdentity);
@@ -699,11 +698,13 @@ public class PeopleTrackingService {
         String determinedIdentity = identityResult.getPersonName();
         int identityFrameCount = identityResult.getFrameCount();
 
-        // Use confirmed identity if available and valid, otherwise use computed identity
+        // Only fall back to the confirmed identity when the current face is
+        // unknown/absent. A freshly recognized known identity is authoritative.
         String confirmedIdentity = track.getConfirmedIdentity();
-        if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)) {
-            log.debug("Using confirmed identity '{}' instead of computed '{}' for finalization",
-                confirmedIdentity, determinedIdentity);
+        if (confirmedIdentity != null && !isUnknownIdentity(confirmedIdentity)
+                && isUnknownIdentity(determinedIdentity)) {
+            log.debug("Using confirmed identity '{}' for finalization (current face unknown)",
+                confirmedIdentity);
             determinedIdentity = confirmedIdentity;
             identityFrameCount = frameCount; // Use all frames since identity is confirmed
         }
@@ -754,6 +755,24 @@ public class PeopleTrackingService {
         return TrackingResult.notReady();
     }
 
+    /**
+     * Resolve the current known identity of a track, if any. Prefers the confirmed
+     * identity (set on finalization) and falls back to a consistent known candidate
+     * from the accumulated observations. Returns {@code null} for unknown or
+     * mixed-identity tracks.
+     */
+    private String resolveTrackKnownIdentity(TrackedPerson track) {
+        String confirmed = track.getConfirmedIdentity();
+        if (confirmed != null && !isUnknownIdentity(confirmed)) {
+            return confirmed;
+        }
+        IdentityResult candidate = track.getConsistentKnownCandidate();
+        if (candidate != null && !isUnknownIdentity(candidate.getPersonName())) {
+            return candidate.getPersonName();
+        }
+        return null;
+    }
+
     private IdentityResult determineIdentity(TrackedPerson track, String cameraName) {
         IdentityResult identityResult = track.getMostCommonIdentity();
         if (!isUnknownIdentity(identityResult.getPersonName())) {
@@ -763,7 +782,7 @@ public class PeopleTrackingService {
         IdentityResult consistentCandidate = track.getConsistentKnownCandidate();
         if (consistentCandidate != null
                 && consistentCandidate.getFrameCount() >= 2
-                && track.observations.size() <= MIN_KNOWN_FRAMES_FOR_IDENTITY
+                && track.observations.size() <= getIdentityMinFrames()
                 && detectionHistoryService.wasKnownPersonDetectedRecently(
                     cameraName,
                     consistentCandidate.getPersonName()
@@ -862,7 +881,7 @@ public class PeopleTrackingService {
      * Represents a person being tracked across multiple frames
      */
     @Data
-    private static class TrackedPerson {
+    private class TrackedPerson {
         private long firstSeen;
         private long lastSeen;
         private final List<FaceObservation> observations = new ArrayList<>();
@@ -1161,9 +1180,9 @@ public class PeopleTrackingService {
          */
         public IdentityResult getMostCommonIdentity() {
             int totalObservations = observations.size();
-            if (totalObservations < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
+            if (totalObservations < getIdentityMinFrames()) {
                 log.info("❌ VERDICT: Only {} captured frame(s) in track. Minimum required is {}, classifying as '{}'.",
-                    totalObservations, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
+                    totalObservations, getIdentityMinFrames(), UNKNOWN_IDENTITY);
                 return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
             }
 
@@ -1179,9 +1198,9 @@ public class PeopleTrackingService {
                 usefulFrames, String.format("%.1f", (usefulFrames * 100.0) / totalObservations),
                 unknownFrames, String.format("%.1f", (unknownFrames * 100.0) / totalObservations));
 
-            if (usefulFrames < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
+            if (usefulFrames < getIdentityMinFrames()) {
                 log.info("❌ VERDICT: Only {} useful frame(s) out of {} total frames. Minimum required is {}, classifying as '{}'.",
-                    usefulFrames, totalObservations, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
+                    usefulFrames, totalObservations, getIdentityMinFrames(), UNKNOWN_IDENTITY);
                 return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
             }
 
@@ -1222,9 +1241,9 @@ public class PeopleTrackingService {
                 return new IdentityResult(UNKNOWN_IDENTITY, usefulFrames);
             }
 
-            if (winningCount < MIN_KNOWN_FRAMES_FOR_IDENTITY) {
+            if (winningCount < getIdentityMinFrames()) {
                 log.info("❌ VERDICT: Winning identity '{}' only has {} non-unknown frame(s). Minimum required is {}, classifying as '{}'.",
-                    winningIdentity, winningCount, MIN_KNOWN_FRAMES_FOR_IDENTITY, UNKNOWN_IDENTITY);
+                    winningIdentity, winningCount, getIdentityMinFrames(), UNKNOWN_IDENTITY);
                 return new IdentityResult(UNKNOWN_IDENTITY, totalObservations);
             }
 
@@ -1382,5 +1401,13 @@ public class PeopleTrackingService {
 
     private int getMaxTrackingFrames() {
         return Math.max(3, streamsProperties.getTrackingMaxFrames());
+    }
+
+    /**
+     * Minimum number of frames a known identity must be observed before being
+     * confirmed. Configurable via {@code object-detection.streams.identity-min-frames}.
+     */
+    private int getIdentityMinFrames() {
+        return Math.max(1, streamsProperties.getIdentityMinFrames());
     }
 }
