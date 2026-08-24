@@ -45,6 +45,7 @@ Controls camera ingestion, frame freshness, and queueing behavior.
 | `object-detection.streams.processing-fps` | integer | `5` | Maximum number of frames per second that the pipeline will process per camera. Lower values reduce latency and memory usage. Higher values can improve temporal smoothness but increase load. |
 | `object-detection.streams.frame-queue-capacity` | integer | `2` | Number of decoded frames buffered per camera. Small values prefer fresh frames over stale backlog. |
 | `object-detection.streams.tracking-max-frames` | integer | `30` | Maximum number of captured frames kept in a single tracking session before the track is finalized and evaluated. Lower values cap memory use sooner; higher values keep longer motion context. |
+| `object-detection.streams.identity-min-frames` | integer | `1` | Minimum number of frames a known identity must be observed before it is confirmed as that person. `1` = recognize on the first frame (fastest); raise this if identity flicker becomes a problem. |
 | `object-detection.streams.cameras` | list | `[]` | List of camera definitions to ingest. |
 
 ### `object-detection.streams.cameras[]`
