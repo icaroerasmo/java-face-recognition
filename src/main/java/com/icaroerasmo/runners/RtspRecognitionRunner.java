@@ -2,6 +2,7 @@ package com.icaroerasmo.runners;
 
 import com.icaroerasmo.detectors.movement.MovementAlertPolicy;
 import com.icaroerasmo.detectors.movement.MovementDetector;
+import com.icaroerasmo.detectors.movement.MovementResultStore;
 import com.icaroerasmo.detectors.person.services.FaceRecognitionRuntime;
 import com.icaroerasmo.detectors.person.services.FaceRecognitionService;
 import com.icaroerasmo.detectors.person.services.FaceRecognizerHolderService;
@@ -40,6 +41,7 @@ public class RtspRecognitionRunner {
     private final TrainingProperties trainingProperties;
     private final CameraPipeline cameraPipeline;
     private final MovementDetector movementDetector;
+    private final MovementResultStore movementResultStore;
     @Qualifier("movementAlertPolicy")
     private final MovementAlertPolicy movementAlertPolicy;
     @Qualifier("petAlertPolicy")
@@ -80,6 +82,7 @@ public class RtspRecognitionRunner {
                     telegramPublisherService,
                     cameraPipeline,
                     movementDetector,
+                    movementResultStore,
                     movementAlertPolicy,
                     petAlertPolicy
                 ));

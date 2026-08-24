@@ -1,5 +1,7 @@
 package com.icaroerasmo.service;
 
+import com.icaroerasmo.detectors.movement.MovementDetector;
+import com.icaroerasmo.detectors.movement.MovementResultStore;
 import com.icaroerasmo.properties.CameraProperties;
 import com.icaroerasmo.properties.StreamsProperties;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +36,8 @@ import static org.bytedeco.opencv.global.opencv_imgproc.resize;
 public class RtspFrameExtractorService {
 
     private final StreamsProperties streamsProperties;
+    private final MovementDetector movementDetector;
+    private final MovementResultStore movementResultStore;
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
@@ -67,12 +71,13 @@ public class RtspFrameExtractorService {
 
     /**
      * Extract frames from RTSP stream with configurable transport protocol
+     * @param cameraName The camera name (for per-camera movement detection state)
      * @param rtspUrl The RTSP URL
      * @param transportProtocol "tcp" or "udp" (defaults to "tcp" if null)
      * @param consumer Callback to process each frame
      */
     @SneakyThrows
-    public void extract(String rtspUrl, CameraProperties.TransportProtocol transportProtocol, Consumer<Mat> consumer) {
+    public void extract(String cameraName, String rtspUrl, CameraProperties.TransportProtocol transportProtocol, Consumer<Mat> consumer) {
         av_log_set_level(AV_LOG_PANIC);
 
         int maxRetries = 3;
@@ -96,7 +101,7 @@ public class RtspFrameExtractorService {
                 grabber.start();
 
                 // Process frames using producer-consumer pattern with byte array storage
-                processFramesWithQueue(grabber, converter, rtspUrl, consumer);
+                processFramesWithQueue(cameraName, grabber, converter, rtspUrl, consumer);
 
                 // Normal exit
                 return;
@@ -236,12 +241,14 @@ public class RtspFrameExtractorService {
      * Producer thread: Grabs frames and stores as byte arrays in queue
      * Consumer thread: Takes byte arrays, reconstructs Mats, and processes them
      */
-    private void processFramesWithQueue(FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
+    private void processFramesWithQueue(String cameraName, FFmpegFrameGrabber grabber, OpenCVFrameConverter.ToMat converter,
                                        String rtspUrl, Consumer<Mat> consumer) throws Exception {
         // Create bounded queue - one per camera stream
         final int queueCapacity = computeFrameQueueCapacity();
         final int processingFps = Math.max(1, streamsProperties.getProcessingFps());
         final long minFrameIntervalNs = TimeUnit.SECONDS.toNanos(1) / processingFps;
+        final int movementFps = Math.max(1, streamsProperties.getMovementFps());
+        final long movementIntervalNs = TimeUnit.SECONDS.toNanos(1) / movementFps;
         BlockingQueue<FrameData> frameQueue = new ArrayBlockingQueue<>(queueCapacity);
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         AtomicBoolean producerError = new AtomicBoolean(false);
@@ -252,15 +259,17 @@ public class RtspFrameExtractorService {
             final int maxNullFrames = Math.max(1, streamsProperties.getMaxConsecutiveNullFrames());
             final int processingWidth = Math.max(0, streamsProperties.getProcessingWidth());
             long lastQueuedAtNs = 0;
+            long lastMovementAtNs = 0;
 
             try {
-                log.info("Frame producer started for: {} (processingFps={}, queueCapacity={}, processingWidth={})",
-                        rtspUrl, processingFps, queueCapacity, processingWidth);
+                log.info("Frame producer started for: {} (processingFps={}, movementFps={}, queueCapacity={}, processingWidth={})",
+                        rtspUrl, processingFps, movementFps, queueCapacity, processingWidth);
 
                 while (!shouldStop.get() && !Thread.currentThread().isInterrupted()) {
                     Frame frame = null;
                     Mat mat = null;
                     Mat resizedMat = null;
+                    Mat movementMat = null;
 
                     try {
                         frame = grabber.grabImage();
@@ -283,10 +292,28 @@ public class RtspFrameExtractorService {
                             continue;
                         }
 
+                        // Capture the time once for both the movement-detection and the
+                        // DNN throttling below.
+                        long nowNs = System.nanoTime();
+
+                        // Movement detection runs at movement-fps (decoupled from the
+                        // slower DNN processing-fps) so movement triggers stay fast.
+                        if (nowNs - lastMovementAtNs >= movementIntervalNs) {
+                            lastMovementAtNs = nowNs;
+                            movementMat = converter.convert(frame);
+                            if (movementMat != null && !movementMat.empty()) {
+                                try {
+                                    movementResultStore.recordMovement(cameraName,
+                                        movementDetector.detect(cameraName, movementMat));
+                                } catch (Exception e) {
+                                    log.warn("Movement detection failed for camera '{}': {}", cameraName, e.getMessage());
+                                }
+                            }
+                        }
+
                         // Throttle BEFORE the expensive convert/grey-check so we only pay
                         // that CPU cost at the configured processing-fps (not the grab
                         // rate), freeing CPU for the detection pipeline.
-                        long nowNs = System.nanoTime();
                         if (nowNs - lastQueuedAtNs < minFrameIntervalNs) {
                             continue;
                         }
@@ -348,6 +375,9 @@ public class RtspFrameExtractorService {
                     } catch (Exception e) {
                         log.error("Error in producer for {}: {}", rtspUrl, e.getMessage(), e);
                     } finally {
+                        if (movementMat != null) {
+                            try { movementMat.release(); } catch (Exception ignore) {}
+                        }
                         if (resizedMat != null) {
                             try { resizedMat.release(); } catch (Exception ignore) {}
                         }

@@ -1,6 +1,7 @@
 package com.icaroerasmo.pipeline.stages;
 
 import com.icaroerasmo.detectors.person.PersonDetector;
+import com.icaroerasmo.messaging.DetectionEventPublisher;
 import com.icaroerasmo.pipeline.FrameContext;
 import com.icaroerasmo.pipeline.FrameStage;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,10 @@ import java.util.List;
 /**
  * STEP 1: First detect if there are any people in the frame.
  * When no people are detected the frame is dropped (processing marked complete).
+ *
+ * <p>The low-latency "person present" presence event is published here, right after
+ * person detection, so the live-stream overlay reacts before the (slower) face
+ * recognition runs.
  */
 @Log4j2
 @Component
@@ -20,6 +25,7 @@ import java.util.List;
 public class PersonDetectionStage implements FrameStage {
 
     private final PersonDetector personDetector;
+    private final DetectionEventPublisher detectionEventPublisher;
 
     @Override
     public void process(FrameContext ctx) {
@@ -32,6 +38,9 @@ public class PersonDetectionStage implements FrameStage {
             ctx.markProcessingComplete();
             return;
         }
+
+        // Publish the low-latency presence event immediately (before face recognition).
+        detectionEventPublisher.publishPresence(ctx.getCameraName());
 
         log.debug("Camera '{}': Detected {} person(s) in frame", ctx.getCameraName(), detectedPeople.size());
     }
