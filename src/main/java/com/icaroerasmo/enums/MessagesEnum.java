@@ -10,5 +10,6 @@ public enum MessagesEnum {
     // Detection events (published to live-transmission overlay via detection.exchange)
     PERSON_DETECTED,
     MOVEMENT_DETECTED,
-    PET_DETECTED
+    PET_DETECTED,
+    CAR_DETECTED
 }

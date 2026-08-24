@@ -26,6 +26,7 @@ public class DetectionEventPublisher {
     private final Map<String, Long> lastPresencePublish = new ConcurrentHashMap<>();
     private final Map<String, Long> lastMovementPublish = new ConcurrentHashMap<>();
     private final Map<String, Long> lastPetPublish = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastCarPublish = new ConcurrentHashMap<>();
 
     public void publish(String cameraName, MessagesEnum template, List<String> args) {
         DetectionEvent event = new DetectionEvent(
@@ -65,6 +66,22 @@ public class DetectionEventPublisher {
      */
     public void publishPet(String cameraName, long debounceMs) {
         publishDebounced(cameraName, debounceMs, MessagesEnum.PET_DETECTED, lastPetPublish);
+    }
+
+    /**
+     * Publishes a low-latency "pet present" event, debounced per camera,
+     * so the live-stream overlay appears as soon as a pet is detected.
+     */
+    public void publishPet(String cameraName) {
+        publishDebounced(cameraName, PRESENCE_DEBOUNCE_MS, MessagesEnum.PET_DETECTED, lastPetPublish);
+    }
+
+    /**
+     * Publishes a low-latency "car present" event, debounced per camera,
+     * so the live-stream overlay appears as soon as a car is detected.
+     */
+    public void publishCar(String cameraName) {
+        publishDebounced(cameraName, PRESENCE_DEBOUNCE_MS, MessagesEnum.CAR_DETECTED, lastCarPublish);
     }
 
     /**
