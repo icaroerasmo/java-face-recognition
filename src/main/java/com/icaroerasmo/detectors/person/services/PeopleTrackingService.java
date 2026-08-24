@@ -323,29 +323,10 @@ public class PeopleTrackingService {
                     detectionHistoryService.markUnknownDetectionAsSent(imageHash, determinedIdentity, cameraName, bestFaceHash);
                 }
 
-                // Create and send GIF animation after the main notification
-                // Only create GIF if we have at least 10 frames for meaningful animation
-                if (allFrameImages != null && allFrameImages.size() >= 10) {
-                    log.info("📹 Creating GIF from {} tracked frames", allFrameImages.size());
-
-                    // Create GIF in a separate thread to not block
-                    new Thread(() -> {
-                        try {
-                            byte[] gifBytes = gifCreationService.createGif(allFrameImages);
-                            if (gifBytes != null && gifBytes.length > 0) {
-                                double duration = allFrameImages.size() / (double) gifCreationService.getGifFps();
-                                telegramPublisherService.sendAnimation(gifBytes, cameraName, allFrameImages.size(), duration);
-                            } else {
-                                log.warn("Failed to create GIF - no bytes generated");
-                            }
-                        } catch (Exception e) {
-                            log.error("Error creating/sending GIF: {}", e.getMessage(), e);
-                        }
-                    }, "GIF-Creator-" + cameraName).start();
-                } else {
-                    log.debug("Skipping GIF creation - not enough frames (have: {})",
-                        allFrameImages != null ? allFrameImages.size() : 0);
-                }
+                // GIF animation is now generated independently of this notification.
+                // The track keeps accumulating frames (across resets) and the GIF is
+                // sent once the buffer reaches the configured max frame count, or when
+                // the track is cleaned up after the person leaves (see TrackedPerson).
             } else {
                 log.info("⏭️ SKIPPING: '{}' already sent recently for camera '{}'", determinedIdentity, cameraName);
             }
@@ -520,6 +501,7 @@ public class PeopleTrackingService {
             // New person, start tracking - clone Rect to avoid issues if original is deallocated
             Rect clonedRect = new Rect(faceRect.x(), faceRect.y(), faceRect.width(), faceRect.height());
             TrackedPerson newTrack = new TrackedPerson(
+                cameraName,
                 clonedRect,
                 faceHash,
                 now,
@@ -893,6 +875,7 @@ public class PeopleTrackingService {
      */
     @Data
     private class TrackedPerson {
+        private final String cameraName; // Camera this track belongs to (for GIF delivery)
         private long firstSeen;
         private long lastSeen;
         private final List<FaceObservation> observations = new ArrayList<>();
@@ -902,8 +885,10 @@ public class PeopleTrackingService {
         private byte[] bestImageBytes;
         private ScheduledFuture<?> pendingNotification; // Timeout notification future
         private String confirmedIdentity; // Persisted identity across track resets
+        private boolean gifSent; // Whether the GIF animation has already been generated and sent
 
         public TrackedPerson(
+                String cameraName,
                 Rect initialRect,
                 byte[] initialFaceHash,
                 long timestamp,
@@ -914,6 +899,7 @@ public class PeopleTrackingService {
                 int maxGifFrames,
                 boolean hasVisibleFace
         ) {
+            this.cameraName = cameraName;
             this.firstSeen = timestamp;
             this.lastSeen = timestamp;
             this.maxGifFrames = maxGifFrames;
@@ -972,8 +958,10 @@ public class PeopleTrackingService {
                 observations.clear();
             }
 
-            // Clear gif frames (old ones are already used in the generated GIF)
-            gifFrames.clear();
+            // NOTE: gifFrames are intentionally NOT cleared here. The GIF is now
+            // generated independently of the photo notification, so frames keep
+            // accumulating across track resets until the buffer reaches maxGifFrames
+            // (or the track is cleaned up after the person leaves).
 
             // Reset timing
             this.firstSeen = resetTimestamp;
@@ -1066,10 +1054,59 @@ public class PeopleTrackingService {
                 return;
             }
 
+            // Once the GIF has been sent there is no need to keep buffering frames.
+            if (gifSent) {
+                return;
+            }
+
             gifFrames.add(createGifFrameSnapshot(imageBytes));
             if (gifFrames.size() > maxGifFrames) {
                 gifFrames.removeFirst();
             }
+
+            // Send the GIF as soon as we have collected the maximum number of frames,
+            // independent of when the photo notification was sent.
+            if (gifFrames.size() >= maxGifFrames) {
+                sendGif();
+            }
+        }
+
+        /**
+         * Generate and send the GIF animation from the accumulated frames.
+         * Runs on a background thread so the tracking pipeline is never blocked.
+         * Idempotent: only the first call for a given track actually sends.
+         */
+        private void sendGif() {
+            if (gifSent) {
+                return;
+            }
+
+            List<byte[]> frames = new ArrayList<>(gifFrames);
+            if (frames.size() < gifCreationService.getMinGifFrames()) {
+                log.debug("Skipping GIF creation - not enough frames (have: {})", frames.size());
+                return;
+            }
+
+            // Mark sent before spawning so concurrent calls cannot double-send.
+            gifSent = true;
+            gifFrames.clear();
+
+            String targetCamera = cameraName;
+            log.info("📹 Creating GIF from {} tracked frames for camera '{}'", frames.size(), targetCamera);
+
+            new Thread(() -> {
+                try {
+                    byte[] gifBytes = gifCreationService.createGif(frames);
+                    if (gifBytes != null && gifBytes.length > 0) {
+                        double duration = frames.size() / (double) gifCreationService.getGifFps();
+                        telegramPublisherService.sendAnimation(gifBytes, targetCamera, frames.size(), duration);
+                    } else {
+                        log.warn("Failed to create GIF - no bytes generated");
+                    }
+                } catch (Exception e) {
+                    log.error("Error creating/sending GIF: {}", e.getMessage(), e);
+                }
+            }, "GIF-Creator-" + targetCamera).start();
         }
 
         private byte[] createGifFrameSnapshot(byte[] imageBytes) {
@@ -1332,6 +1369,9 @@ public class PeopleTrackingService {
                 }
                 releasePersonDetections(observation.allPeople);
             }
+            // Flush any remaining frames as a final GIF before discarding the track
+            // (only sends if enough frames were collected and none was sent yet).
+            sendGif();
             gifFrames.clear();
             observations.clear();
         }

@@ -232,4 +232,8 @@ public class GifCreationService {
     public int getMaxGifFrames() {
         return Math.max(MIN_FRAMES, objectDetectionProperties.getTelegram().getGifMaxFrames());
     }
+
+    public int getMinGifFrames() {
+        return MIN_FRAMES;
+    }
 }
