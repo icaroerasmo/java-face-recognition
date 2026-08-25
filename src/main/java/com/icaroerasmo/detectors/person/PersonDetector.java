@@ -101,7 +101,6 @@ public class PersonDetector implements IDetector {
             }
 
             if (!candidates.isEmpty()) {
-                detectionEventPublisher.publishPresence(frameCtx.getCameraName());
                 log.debug("Detected {} person(s) in image", candidates.size());
             }
 
