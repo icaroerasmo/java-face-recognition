@@ -12,8 +12,28 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  create-tag:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Extract version from pom.xml file
+        id: extractVersion
+        uses: dostonhamrakulov/maven-artifact-version-extractor@v1.0
+        with:
+          file_path: ${{ github.workspace }}/pom.xml
+      - name: Bump version and push tag
+        uses: anothrNick/github-tag-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUSTOM_TAG: release/${{ steps.extractVersion.outputs.version }}
+
   build-and-push-image:
     if: github.event.pull_request.merged == true
+    needs: create-tag
     strategy:
       matrix:
         include:
@@ -38,11 +58,6 @@ jobs:
         uses: dostonhamrakulov/maven-artifact-version-extractor@v1.0
         with:
           file_path: ${{ github.workspace }}/pom.xml
-      - name: Bump version and push tag
-        uses: anothrNick/github-tag-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CUSTOM_TAG: release/${{ steps.extractVersion.outputs.version }}
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
         with:
