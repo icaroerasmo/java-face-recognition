@@ -4,7 +4,7 @@ This document describes the application properties supported by **RTSP Object De
 
 For architecture, operations, troubleshooting, and the release/deployment process, see [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md).
 
-All examples below use **placeholder values only**. Do not commit real RTSP URLs, Telegram tokens, chat IDs, or other environment-specific values to the repository.
+All examples below use **placeholder values only**. Do not commit real RTSP URLs or other environment-specific values to the repository.
 
 ## Configuration root
 
@@ -30,8 +30,6 @@ object-detection:
     enable-opencl: true
     fallback-to-cpu: true
   telegram:
-    bot-token: "${TELEGRAM_BOT_TOKEN:}"
-    chat-id: "${TELEGRAM_CHAT_ID:}"
     gif-fps: 10
     gif-max-frames: 30
 ```
@@ -83,19 +81,17 @@ Controls the OpenCV DNN backend/target selection.
 
 ## `object-detection.telegram`
 
-Controls Telegram notification delivery and animation rendering.
+Controls clip rendering for detection notifications. Notifications are published to RabbitMQ and delivered by the dedicated notifier service.
 
 | Property | Type | Default | Description |
-|---|---|---:|---|
-| `object-detection.telegram.bot-token` | string | none | Telegram bot token. Prefer environment-variable injection instead of committing the real token. |
-| `object-detection.telegram.chat-id` | string | none | Telegram chat ID that receives notifications. Prefer environment-variable injection instead of committing the real value. |
-| `object-detection.telegram.gif-fps` | integer | `10` | Frame rate used when building Telegram animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
-| `object-detection.telegram.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for Telegram clips. Lower values reduce RAM and clip-encoding cost. |
+|---|---:|---|
+| `object-detection.telegram.gif-fps` | integer | `10` | Frame rate used when building animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
+| `object-detection.telegram.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for clips. Lower values reduce RAM and clip-encoding cost. |
 
 ## Security guidance
 
 1. Keep committed examples sanitized.
-2. Inject secrets such as Telegram credentials through environment variables or private deployment files.
+2. Inject secrets through environment variables or private deployment files.
 3. Avoid committing production RTSP endpoints, usernames, passwords, tokens, or chat identifiers.
 
 ## Notes
