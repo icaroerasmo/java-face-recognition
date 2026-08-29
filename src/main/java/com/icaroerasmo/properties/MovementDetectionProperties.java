@@ -16,9 +16,9 @@ public class MovementDetectionProperties {
     private boolean enabled = true;
 
     /**
-     * Whether movement events should also notify Telegram (throttled).
+     * Whether movement events should also publish a notification (throttled).
      */
-    private boolean notifyTelegram = true;
+    private boolean notify = true;
 
     /**
      * Pixel-intensity threshold for the binary difference image.
@@ -36,9 +36,9 @@ public class MovementDetectionProperties {
     private long debounceMs = 5000;
 
     /**
-     * Minimum interval (ms) between Telegram movement messages per camera.
+     * Minimum interval (ms) between movement notification messages per camera.
      */
-    private long telegramThrottleMs = 30000;
+    private long throttleMs = 30000;
 
     /**
      * Width used to downscale frames for differencing (aspect ratio preserved).

@@ -71,41 +71,41 @@ class MovementAlertPolicyTest {
     }
 
     @Test
-    void telegramThrottleIsIndependentFromOverlayDebounce() {
+    void throttleIsIndependentFromOverlayDebounce() {
         MovementAlertPolicy policy = new MovementAlertPolicy();
         long overlayDebounce = 5000;
-        long telegramThrottle = 30000;
+        long throttle = 30000;
 
         assertTrue(policy.shouldPublish("cam", 0, overlayDebounce));
-        assertTrue(policy.shouldSendTelegram("cam", 0, telegramThrottle));
+        assertTrue(policy.shouldSend("cam", 0, throttle));
 
-        // Overlay re-publishes at 6s and 12s; telegram stays throttled.
+        // Overlay re-publishes at 6s and 12s; notification stays throttled.
         assertTrue(policy.shouldPublish("cam", 6000, overlayDebounce));
-        assertFalse(policy.shouldSendTelegram("cam", 6000, telegramThrottle));
+        assertFalse(policy.shouldSend("cam", 6000, throttle));
 
         assertTrue(policy.shouldPublish("cam", 12000, overlayDebounce));
-        assertFalse(policy.shouldSendTelegram("cam", 12000, telegramThrottle));
+        assertFalse(policy.shouldSend("cam", 12000, throttle));
 
-        // Telegram throttled until 30s after the first send.
-        assertFalse(policy.shouldSendTelegram("cam", 29999, telegramThrottle));
-        assertTrue(policy.shouldSendTelegram("cam", 30000, telegramThrottle));
+        // Notification throttled until 30s after the first send.
+        assertFalse(policy.shouldSend("cam", 29999, throttle));
+        assertTrue(policy.shouldSend("cam", 30000, throttle));
 
         // Both windows still independent afterwards.
         assertTrue(policy.shouldPublish("cam", 30000, overlayDebounce));
-        assertFalse(policy.shouldSendTelegram("cam", 30001, telegramThrottle));
+        assertFalse(policy.shouldSend("cam", 30001, throttle));
     }
 
     @Test
-    void overlayDebounceDoesNotSuppressTelegram() {
+    void overlayDebounceDoesNotSuppressNotification() {
         MovementAlertPolicy policy = new MovementAlertPolicy();
         long overlayDebounce = 30000;
-        long telegramThrottle = 5000;
+        long throttle = 5000;
 
         assertTrue(policy.shouldPublish("cam", 0, overlayDebounce));
-        assertTrue(policy.shouldSendTelegram("cam", 0, telegramThrottle));
+        assertTrue(policy.shouldSend("cam", 0, throttle));
 
-        // Telegram can send again at 6s even though the overlay window is still open.
-        assertTrue(policy.shouldSendTelegram("cam", 6000, telegramThrottle));
+        // Notification can send again at 6s even though the overlay window is still open.
+        assertTrue(policy.shouldSend("cam", 6000, throttle));
         assertFalse(policy.shouldPublish("cam", 6000, overlayDebounce));
     }
 }

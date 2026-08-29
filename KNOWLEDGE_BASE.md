@@ -79,7 +79,7 @@ Key settings:
 | `object-detection.streams.max-consecutive-null-frames` | Reconnect threshold for unstable streams |
 | `object-detection.detection.person-confidence-threshold` | Minimum confidence for person detections |
 | `object-detection.acceleration.*` | OpenCV backend and target selection |
-| `object-detection.telegram.*` | Clip rendering settings (gif-fps, gif-max-frames) |
+| `object-detection.clips.*` | Clip rendering settings (gif-fps, gif-max-frames) |
 
 ## Training data
 

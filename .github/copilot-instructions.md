@@ -29,7 +29,7 @@ There is no dedicated lint command configured in `pom.xml` or in GitHub Actions.
 ## Key conventions
 
 - Keep all committed configuration sanitized. `README.MD` and `config.yaml` use placeholders only; do not commit real RTSP URLs or camera credentials.
-- Repository-specific configuration lives under the `object-detection.*` property tree. New config should follow the existing nested properties structure (`streams`, `training`, `acceleration`, `telegram`) instead of adding ad hoc top-level keys. In `training`, only `root-folder` is still live on this branch; `dataset-path` was removed.
+- Repository-specific configuration lives under the `object-detection.*` property tree. New config should follow the existing nested properties structure (`streams`, `training`, `acceleration`, `clips`) instead of adding ad hoc top-level keys. In `training`, only `root-folder` is still live on this branch; `dataset-path` was removed.
 - Treat OpenCV inference objects as **not concurrency-safe**. Existing code serializes DNN execution through `DnnInferenceCoordinator`, synchronizes shared detector methods, and updates the active `FaceRecognizer` through `FaceRecognizerHolder` instead of mutating it in place.
 - Person tracking is the source of truth for notifications. Do not publish alerts directly from raw per-frame detections unless you are intentionally bypassing the duplicate-suppression and movement heuristics already implemented in `PeopleTrackingService` and `DetectionHistoryService`.
 - Training data is organized as one folder per identity under the configured training root. The folder name becomes the recognition label, and each accepted training image must contain exactly one detectable face.

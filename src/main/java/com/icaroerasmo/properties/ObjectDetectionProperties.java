@@ -21,7 +21,7 @@ public class ObjectDetectionProperties {
     private TrainingProperties training = new TrainingProperties();
 
     @NestedConfigurationProperty
-    private TelegramProperties telegram = new TelegramProperties();
+    private ClipProperties clips = new ClipProperties();
 
     @NestedConfigurationProperty
     private AccelerationProperties acceleration = new AccelerationProperties();

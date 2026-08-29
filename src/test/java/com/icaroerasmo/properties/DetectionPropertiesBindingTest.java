@@ -36,11 +36,11 @@ class DetectionPropertiesBindingTest {
     void movementDefaultsApplyWhenNoKeysProvided() {
         MovementDetectionProperties movement = bind(Map.of()).getDetection().getMovement();
         assertTrue(movement.isEnabled());
-        assertTrue(movement.isNotifyTelegram());
+        assertTrue(movement.isNotify());
         assertEquals(25, movement.getDifferenceThreshold());
         assertEquals(0.01, movement.getMinMotionRatio(), 1e-9);
         assertEquals(5000L, movement.getDebounceMs());
-        assertEquals(30000L, movement.getTelegramThrottleMs());
+        assertEquals(30000L, movement.getThrottleMs());
         assertEquals(320, movement.getProcessingWidth());
         assertEquals(5, movement.getGaussianKernelSize());
         assertEquals(2, movement.getDilationIterations());
@@ -54,7 +54,7 @@ class DetectionPropertiesBindingTest {
         assertEquals(0.5, pet.getPlantConfidenceThreshold(), 1e-9);
         assertEquals(0.35, pet.getPlantSuppressionIou(), 1e-9);
         assertEquals(5000L, pet.getDebounceMs());
-        assertEquals(30000L, pet.getTelegramThrottleMs());
+        assertEquals(30000L, pet.getThrottleMs());
     }
 
     @Test
@@ -69,22 +69,22 @@ class DetectionPropertiesBindingTest {
     void kebabCaseYamlKeysBindToMovementProperties() {
         Map<String, Object> props = new HashMap<>();
         props.put("object-detection.detection.movement.enabled", "false");
-        props.put("object-detection.detection.movement.notify-telegram", "false");
+        props.put("object-detection.detection.movement.notify", "false");
         props.put("object-detection.detection.movement.difference-threshold", "40");
         props.put("object-detection.detection.movement.min-motion-ratio", "0.02");
         props.put("object-detection.detection.movement.debounce-ms", "8000");
-        props.put("object-detection.detection.movement.telegram-throttle-ms", "60000");
+        props.put("object-detection.detection.movement.throttle-ms", "60000");
         props.put("object-detection.detection.movement.processing-width", "640");
         props.put("object-detection.detection.movement.gaussian-kernel-size", "7");
         props.put("object-detection.detection.movement.dilation-iterations", "3");
 
         MovementDetectionProperties movement = bind(props).getDetection().getMovement();
         assertFalse(movement.isEnabled());
-        assertFalse(movement.isNotifyTelegram());
+        assertFalse(movement.isNotify());
         assertEquals(40, movement.getDifferenceThreshold());
         assertEquals(0.02, movement.getMinMotionRatio(), 1e-9);
         assertEquals(8000L, movement.getDebounceMs());
-        assertEquals(60000L, movement.getTelegramThrottleMs());
+        assertEquals(60000L, movement.getThrottleMs());
         assertEquals(640, movement.getProcessingWidth());
         assertEquals(7, movement.getGaussianKernelSize());
         assertEquals(3, movement.getDilationIterations());
@@ -98,7 +98,7 @@ class DetectionPropertiesBindingTest {
         props.put("object-detection.detection.pet.plant-confidence-threshold", "0.7");
         props.put("object-detection.detection.pet.plant-suppression-iou", "0.5");
         props.put("object-detection.detection.pet.debounce-ms", "10000");
-        props.put("object-detection.detection.pet.telegram-throttle-ms", "45000");
+        props.put("object-detection.detection.pet.throttle-ms", "45000");
 
         PetDetectionProperties pet = bind(props).getDetection().getPet();
         assertFalse(pet.isEnabled());
@@ -106,7 +106,7 @@ class DetectionPropertiesBindingTest {
         assertEquals(0.7, pet.getPlantConfidenceThreshold(), 1e-9);
         assertEquals(0.5, pet.getPlantSuppressionIou(), 1e-9);
         assertEquals(10000L, pet.getDebounceMs());
-        assertEquals(45000L, pet.getTelegramThrottleMs());
+        assertEquals(45000L, pet.getThrottleMs());
     }
 
     @Test

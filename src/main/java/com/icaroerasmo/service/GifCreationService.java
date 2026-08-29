@@ -226,11 +226,11 @@ public class GifCreationService {
     }
 
     public int getGifFps() {
-        return Math.max(1, objectDetectionProperties.getTelegram().getGifFps());
+        return Math.max(1, objectDetectionProperties.getClips().getGifFps());
     }
 
     public int getMaxGifFrames() {
-        return Math.max(MIN_FRAMES, objectDetectionProperties.getTelegram().getGifMaxFrames());
+        return Math.max(MIN_FRAMES, objectDetectionProperties.getClips().getGifMaxFrames());
     }
 
     public int getMinGifFrames() {
