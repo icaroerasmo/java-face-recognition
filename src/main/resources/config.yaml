@@ -13,10 +13,15 @@ object-detection:
   training:
     root-folder: "train"
   acceleration:
-    backend: CUDA
-    target: CUDA
-    face-detection-target: CUDA
-    person-detection-target: CUDA
+    # Inference backend. AUTO detects the best available at startup
+    # (CUDA > OpenCL > Vulkan > CPU for OpenCV DNN). Other options:
+    # OPENCV (CPU), CUDA, OPENCL, VULKAN, ONNX_CPU, ONNX_CUDA, ONNX_ROCM.
+    # Overridable at runtime via OBJECT_DETECTION_ACCELERATION_BACKEND env var
+    # (e.g. in the compose file: ACCELERATION_BACKEND=OPENCL).
+    backend: AUTO
+    target: AUTO
+    face-detection-target: AUTO
+    person-detection-target: AUTO
     enable-opencl: true
     fallback-to-cpu: true
   detection:

@@ -11,7 +11,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.icaroerasmo.com</groupId>
   <artifactId>rtsp-object-detection</artifactId>
-  <version>0.5.4</version>
+  <version>0.6.0</version>
   <name>object-detection</name>
   <url>http://maven.apache.org</url>
 
@@ -76,6 +76,13 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!-- ONNX Runtime (CPU EP). The CUDA EP requires the onnxruntime_gpu artifact
+         plus CUDA 12 / cuDNN 9 on the host; the engine falls back to CPU otherwise. -->
+    <dependency>
+      <groupId>com.microsoft.onnxruntime</groupId>
+      <artifactId>onnxruntime</artifactId>
+      <version>1.27.0</version>
     </dependency>
     <!-- Test infrastructure (hermetic unit tests; no GPU/OpenCL/RabbitMQ/Spring context) -->
     <dependency>

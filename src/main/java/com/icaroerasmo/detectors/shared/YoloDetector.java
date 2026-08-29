@@ -1,7 +1,9 @@
 package com.icaroerasmo.detectors.shared;
 
 import com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper;
-import com.icaroerasmo.properties.AccelerationProperties;
+import com.icaroerasmo.detectors.shared.engine.DnnEngine;
+import com.icaroerasmo.detectors.shared.engine.DnnEngineFactory;
+import com.icaroerasmo.detectors.shared.engine.TensorData;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
 import com.icaroerasmo.utils.MatUtil;
 import com.icaroerasmo.utils.OpenCvResourceHelper;
@@ -12,7 +14,6 @@ import org.bytedeco.opencv.opencv_core.Rect;
 import org.bytedeco.opencv.opencv_core.RectVector;
 import org.bytedeco.opencv.opencv_core.Scalar;
 import org.bytedeco.opencv.opencv_core.Size;
-import org.bytedeco.opencv.opencv_dnn.Net;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -28,16 +29,8 @@ import java.util.Set;
 import static org.bytedeco.opencv.global.opencv_core.BORDER_CONSTANT;
 import static org.bytedeco.opencv.global.opencv_core.CV_32F;
 import static org.bytedeco.opencv.global.opencv_core.copyMakeBorder;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_BACKEND_CUDA;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_BACKEND_OPENCV;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_CPU;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_OPENCL;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_CUDA;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_CUDA_FP16;
-import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_OPENCL_FP16;
 import static org.bytedeco.opencv.global.opencv_dnn.NMSBoxes;
 import static org.bytedeco.opencv.global.opencv_dnn.blobFromImage;
-import static org.bytedeco.opencv.global.opencv_dnn.readNetFromONNX;
 import static org.bytedeco.opencv.global.opencv_imgproc.INTER_LINEAR;
 import static org.bytedeco.opencv.global.opencv_imgproc.resize;
 
@@ -51,6 +44,9 @@ import static org.bytedeco.opencv.global.opencv_imgproc.resize;
  * inference coordinator). The returned {@link Rect}s are owned by the caller and must
  * be deallocated when consumed; every Rect created here but not returned (NMS
  * suppressed) is deallocated before this method returns.
+ *
+ * <p>The inference engine (OpenCV DNN or ONNX Runtime) is selected by
+ * {@link DnnEngineFactory} based on the configured acceleration backend.
  */
 @Log4j2
 @Service
@@ -76,7 +72,7 @@ public class YoloDetector {
 
     private volatile long lastRawLogTime = 0L;
 
-    private final Net net;
+    private final DnnEngine engine;
     private final MatUtil matUtil;
     private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
 
@@ -91,20 +87,14 @@ public class YoloDetector {
             String modelPath = OpenCvResourceHelper.getResourcePath(MODEL_FILE, YoloDetector.class);
 
             log.info("Loading YOLOv8n model from: {}", modelPath);
-            this.net = readNetFromONNX(modelPath);
-            configureNet(
-                    this.net,
+            this.engine = DnnEngineFactory.create(
+                    modelPath,
                     objectDetectionProperties.getAcceleration().getBackend(),
                     objectDetectionProperties.getAcceleration().getPersonDetectionTarget(),
                     objectDetectionProperties.getAcceleration().isFallbackToCpu(),
                     "object detection"
             );
-
-            if (this.net == null || this.net.empty()) {
-                throw new IllegalStateException("Failed to load network - network is null or empty");
-            }
-
-            log.info("YOLOv8n model loaded successfully");
+            log.info("YOLOv8n model loaded successfully [{}]", engine.describe());
         } catch (Exception e) {
             log.error("Failed to load YOLOv8n model: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to initialize YOLOv8n model", e);
@@ -129,7 +119,7 @@ public class YoloDetector {
             return detections;
         }
 
-        Mat resized = null, canvas = null, blob = null, output = null;
+        Mat resized = null, canvas = null, blob = null;
         Scalar padColor = null, blobMean = null;
         Size resizedSize = null, blobSize = null;
         RectVector boxesVector = null;
@@ -169,33 +159,21 @@ public class YoloDetector {
 
             // --- Forward ---
             Mat inferenceBlob = blob;
-            output = dnnInferenceCoordinatorHelper.runExclusive("object detection", () -> {
-                // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
-                net.setInput(inferenceBlob);
-                return net.forward();
-            });
-
-            if (output == null || output.empty()) {
-                log.warn("Neural network forward pass returned empty output");
-                return detections;
-            }
+            TensorData output = dnnInferenceCoordinatorHelper.runExclusive("object detection", () -> engine.forward(inferenceBlob));
 
             // --- Parse [1, 84, 8400] ---
             // The tensor is read flat with a row stride of 8400 (equivalent to reshaping
             // to [84, 8400]); no physical Mat reshape is needed and no extra native
             // wrapper is allocated.
-            int rows = (int) output.size(1);
-            int cols = (int) output.size(2);
+            int rows = output.size(1);
+            int cols = output.size(2);
             long total = output.total();
             if (rows != OUTPUT_ROWS || cols != OUTPUT_COLS || total != (long) OUTPUT_ROWS * OUTPUT_COLS) {
                 log.warn("Unexpected YOLOv8 output shape: {}x{} (total={})", rows, cols, total);
                 return detections;
             }
 
-            float[] d = new float[(int) total];
-            outputPointer = new FloatPointer(output.data());
-            outputPointer.limit(d.length);
-            outputPointer.get(d);
+            float[] d = output.data();
 
             for (int j = 0; j < OUTPUT_COLS; j++) {
                 // bbox in 640-scale pixels (already decoded by the model)
@@ -301,7 +279,7 @@ public class YoloDetector {
                 blobSize.deallocate();
             }
             // outputPointer is a proxy view over output.data() and must NOT be released.
-            matUtil.releaseResources(resized, canvas, blob, output);
+            matUtil.releaseResources(resized, canvas, blob);
         }
     }
 
@@ -342,48 +320,5 @@ public class YoloDetector {
               .append(String.format(Locale.ROOT, "%.2f", entry.getValue()));
         }
         log.info(sb.toString());
-    }
-
-    private static void configureNet(
-            Net net,
-            AccelerationProperties.Backend backend,
-            AccelerationProperties.Target target,
-            boolean fallbackToCpu,
-            String modelName
-    ) {
-        try {
-            if (backend != null && backend != AccelerationProperties.Backend.AUTO) {
-                net.setPreferableBackend(mapBackend(backend));
-            }
-            if (target != null && target != AccelerationProperties.Target.AUTO) {
-                net.setPreferableTarget(mapTarget(target));
-            }
-            log.info("Configured {} DNN backend={} target={}", modelName, backend, target);
-        } catch (Exception e) {
-            if (!fallbackToCpu) {
-                throw e;
-            }
-            log.warn("Failed to configure {} acceleration (backend={}, target={}), falling back to CPU: {}",
-                    modelName, backend, target, e.getMessage());
-            net.setPreferableBackend(DNN_BACKEND_OPENCV);
-            net.setPreferableTarget(DNN_TARGET_CPU);
-        }
-    }
-
-    private static int mapBackend(AccelerationProperties.Backend backend) {
-        return switch (backend) {
-            case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
-            case CUDA -> DNN_BACKEND_CUDA;
-        };
-    }
-
-    private static int mapTarget(AccelerationProperties.Target target) {
-        return switch (target) {
-            case AUTO, CPU -> DNN_TARGET_CPU;
-            case OPENCL -> DNN_TARGET_OPENCL;
-            case OPENCL_FP16 -> DNN_TARGET_OPENCL_FP16;
-            case CUDA -> DNN_TARGET_CUDA;
-            case CUDA_FP16 -> DNN_TARGET_CUDA_FP16;
-        };
     }
 }

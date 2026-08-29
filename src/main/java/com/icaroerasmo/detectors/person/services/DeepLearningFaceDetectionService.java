@@ -3,17 +3,17 @@ package com.icaroerasmo.detectors.person.services;
 import com.icaroerasmo.properties.AccelerationProperties;
 import com.icaroerasmo.properties.ObjectDetectionProperties;
 import com.icaroerasmo.detectors.person.helper.DnnInferenceCoordinatorHelper;
+import com.icaroerasmo.detectors.shared.engine.DnnEngine;
+import com.icaroerasmo.detectors.shared.engine.DnnEngineFactory;
+import com.icaroerasmo.detectors.shared.engine.TensorData;
 import com.icaroerasmo.utils.MatUtil;
 import com.icaroerasmo.utils.OpenCvResourceHelper;
 import lombok.extern.log4j.Log4j2;
-import org.bytedeco.javacpp.indexer.FloatIndexer;
 
 import org.bytedeco.opencv.opencv_core.*;
-import org.bytedeco.opencv.opencv_dnn.*;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +41,7 @@ public class DeepLearningFaceDetectionService {
     private static final int MAX_DETECTIONS = 50;
     private static final int[] SCRFD_STRIDES = {8, 16, 32};
     private static final int SCRFD_ANCHORS_PER_LOCATION = 2;
-    private final Net net;
+    private final DnnEngine engine;
 
     private final MatUtil matUtil;
     private final DnnInferenceCoordinatorHelper dnnInferenceCoordinatorHelper;
@@ -57,9 +57,8 @@ public class DeepLearningFaceDetectionService {
             String modelPath = OpenCvResourceHelper.getResourcePath(SCRFD_MODEL_FILE, DeepLearningFaceDetectionService.class);
 
             log.info("Loading SCRFD face detection model from: {}", modelPath);
-            this.net = readNetFromONNX(modelPath);
-            configureNet(
-                    this.net,
+            this.engine = DnnEngineFactory.create(
+                    modelPath,
                     objectDetectionProperties.getAcceleration().getBackend(),
                     resolveTarget(
                             objectDetectionProperties.getAcceleration(),
@@ -68,7 +67,7 @@ public class DeepLearningFaceDetectionService {
                     objectDetectionProperties.getAcceleration().isFallbackToCpu(),
                     "face detection"
             );
-            log.info("SCRFD face detection model loaded successfully");
+            log.info("SCRFD face detection model loaded successfully [{}]", engine.describe());
         } catch (Exception e) {
             log.error("Failed to load face detection model", e);
             throw new RuntimeException("Failed to initialize face detection model", e);
@@ -77,7 +76,7 @@ public class DeepLearningFaceDetectionService {
 
     /**
      * Detect faces in an image.
-     * THREAD-SAFE: Synchronized to prevent concurrent access to the shared Net object,
+     * THREAD-SAFE: Synchronized to prevent concurrent access to the shared engine,
      * which was causing false detections when multiple cameras were processing frames simultaneously.
      */
     public synchronized List<FaceDetection> detect(Mat testImage) {
@@ -90,8 +89,6 @@ public class DeepLearningFaceDetectionService {
         }
 
         Mat blob = null, resizedImage = null, paddedImage = null;
-        MatVector outputs = null;
-        StringVector outputNames = null;
         Size inputSize = null;
         Size resizedSize = null;
         Scalar meanValues = null;
@@ -139,22 +136,16 @@ public class DeepLearningFaceDetectionService {
             }
 
             Mat inferenceBlob = blob;
-            outputNames = net.getUnconnectedOutLayersNames();
-            StringVector finalOutputNames = outputNames;
-            outputs = dnnInferenceCoordinatorHelper.runExclusive("face detection", () -> {
-                // OpenCL-backed DNN inference is not stable when multiple networks run concurrently.
-                net.setInput(inferenceBlob);
-                MatVector out = new MatVector(finalOutputNames.size());
-                net.forward(out, finalOutputNames);
-                return out;
-            });
+            List<String> outputNames = engine.getOutputNames();
+            Map<String, TensorData> outputs = dnnInferenceCoordinatorHelper.runExclusive("face detection", () ->
+                    engine.forward(inferenceBlob, outputNames));
 
-            if (outputs == null || outputs.size() < SCRFD_STRIDES.length * 3L) {
+            if (outputs == null || outputs.isEmpty()) {
                 log.warn("Neural network forward pass returned empty output");
                 return faces;
             }
 
-            List<Detection> detections = decodeScrfdOutputs(outputs, outputNames, scale, originalWidth, originalHeight);
+            List<Detection> detections = decodeScrfdOutputs(outputs, scale, originalWidth, originalHeight);
             detections.sort(Comparator.comparing(Detection::confidence).reversed());
             faces.addAll(applyNms(detections));
 
@@ -171,12 +162,6 @@ public class DeepLearningFaceDetectionService {
             }
             if (resizedSize != null) {
                 resizedSize.deallocate();
-            }
-            if (outputNames != null) {
-                outputNames.deallocate();
-            }
-            if (outputs != null) {
-                outputs.deallocate();
             }
             if (paddingColor != null) {
                 paddingColor.deallocate();
@@ -195,150 +180,91 @@ public class DeepLearningFaceDetectionService {
     }
 
     private List<Detection> decodeScrfdOutputs(
-            MatVector outputs,
-            StringVector outputNames,
+            Map<String, TensorData> outputs,
             float scale,
             int originalWidth,
             int originalHeight
     ) {
         List<Detection> detections = new ArrayList<>();
-        Map<String, Mat> outputByName = new HashMap<>();
-
-        for (long index = 0; index < outputs.size(); index++) {
-            String outputName = sanitizeOutputName(outputNames.get(index).getString());
-            outputByName.put(outputName, outputs.get(index));
-        }
 
         for (int strideIndex = 0; strideIndex < SCRFD_STRIDES.length; strideIndex++) {
             int stride = SCRFD_STRIDES[strideIndex];
-            Mat scores = outputByName.get("score_" + stride);
-            Mat boxes = outputByName.get("bbox_" + stride);
-            Mat keypoints = outputByName.get("kps_" + stride);
+            TensorData scores = outputs.get("score_" + stride);
+            TensorData boxes = outputs.get("bbox_" + stride);
+            TensorData keypoints = outputs.get("kps_" + stride);
 
-            if (scores == null || scores.empty() || boxes == null || boxes.empty() || keypoints == null || keypoints.empty()) {
+            if (scores == null || boxes == null || keypoints == null) {
                 log.warn("SCRFD outputs missing for stride {} (score present: {}, bbox present: {}, kps present: {})",
                         stride,
-                        scores != null && !scores.empty(),
-                        boxes != null && !boxes.empty(),
-                        keypoints != null && !keypoints.empty());
+                        scores != null,
+                        boxes != null,
+                        keypoints != null);
                 continue;
             }
 
-            FloatIndexer scoreIndexer = null;
-            FloatIndexer boxIndexer = null;
-            FloatIndexer keypointIndexer = null;
-            try {
-                scoreIndexer = scores.createIndexer();
-                boxIndexer = boxes.createIndexer();
-                keypointIndexer = keypoints.createIndexer();
+            int featureWidth = MODEL_INPUT_SIZE / stride;
+            int featureHeight = MODEL_INPUT_SIZE / stride;
+            int anchorCount = featureWidth * featureHeight * SCRFD_ANCHORS_PER_LOCATION;
+            long scoreEntries = getAnchoredEntryCount(scores);
+            long boxEntries = getAnchoredEntryCount(boxes);
+            long keypointEntries = getAnchoredEntryCount(keypoints);
 
-                int featureWidth = MODEL_INPUT_SIZE / stride;
-                int featureHeight = MODEL_INPUT_SIZE / stride;
-                int anchorCount = featureWidth * featureHeight * SCRFD_ANCHORS_PER_LOCATION;
-                long scoreEntries = getAnchoredEntryCount(scoreIndexer);
-                long boxEntries = getAnchoredEntryCount(boxIndexer);
-                long keypointEntries = getAnchoredEntryCount(keypointIndexer);
+            if (scoreEntries < anchorCount || boxEntries < anchorCount || keypointEntries < anchorCount) {
+                log.warn("SCRFD output shape mismatch for stride {}: expected at least {} anchors, got scores={} boxes={} keypoints={}",
+                        stride, anchorCount, scoreEntries, boxEntries, keypointEntries);
+                continue;
+            }
 
-                if (scoreEntries < anchorCount || boxEntries < anchorCount || keypointEntries < anchorCount) {
-                    log.warn("SCRFD output shape mismatch for stride {}: expected at least {} anchors, got scores={} boxes={} keypoints={}",
-                            stride, anchorCount, scoreEntries, boxEntries, keypointEntries);
+            float[] scoreData = scores.data();
+            float[] boxData = boxes.data();
+            float[] keypointData = keypoints.data();
+
+            for (int anchorIndex = 0; anchorIndex < anchorCount; anchorIndex++) {
+                float confidence = scoreData[anchorIndex];
+                if (confidence < CONFIDENCE_THRESHOLD) {
                     continue;
                 }
 
-                for (int anchorIndex = 0; anchorIndex < anchorCount; anchorIndex++) {
-                    float confidence = getScore(scoreIndexer, anchorIndex);
-                    if (confidence < CONFIDENCE_THRESHOLD) {
-                        continue;
-                    }
+                int locationIndex = anchorIndex / SCRFD_ANCHORS_PER_LOCATION;
+                int x = locationIndex % featureWidth;
+                int y = locationIndex / featureWidth;
+                float anchorCenterX = x * stride;
+                float anchorCenterY = y * stride;
 
-                    int locationIndex = anchorIndex / SCRFD_ANCHORS_PER_LOCATION;
-                    int x = locationIndex % featureWidth;
-                    int y = locationIndex / featureWidth;
-                    float anchorCenterX = x * stride;
-                    float anchorCenterY = y * stride;
+                float left = boxData[(int) (anchorIndex * 4L + 0)] * stride;
+                float top = boxData[(int) (anchorIndex * 4L + 1)] * stride;
+                float right = boxData[(int) (anchorIndex * 4L + 2)] * stride;
+                float bottom = boxData[(int) (anchorIndex * 4L + 3)] * stride;
 
-                    float left = getBoxCoordinate(boxIndexer, anchorIndex, 0) * stride;
-                    float top = getBoxCoordinate(boxIndexer, anchorIndex, 1) * stride;
-                    float right = getBoxCoordinate(boxIndexer, anchorIndex, 2) * stride;
-                    float bottom = getBoxCoordinate(boxIndexer, anchorIndex, 3) * stride;
+                int x1 = clamp(Math.round((anchorCenterX - left) / scale), 0, originalWidth - 1);
+                int y1 = clamp(Math.round((anchorCenterY - top) / scale), 0, originalHeight - 1);
+                int x2 = clamp(Math.round((anchorCenterX + right) / scale), 0, originalWidth - 1);
+                int y2 = clamp(Math.round((anchorCenterY + bottom) / scale), 0, originalHeight - 1);
 
-                    int x1 = clamp(Math.round((anchorCenterX - left) / scale), 0, originalWidth - 1);
-                    int y1 = clamp(Math.round((anchorCenterY - top) / scale), 0, originalHeight - 1);
-                    int x2 = clamp(Math.round((anchorCenterX + right) / scale), 0, originalWidth - 1);
-                    int y2 = clamp(Math.round((anchorCenterY + bottom) / scale), 0, originalHeight - 1);
-
-                    if (x2 <= x1 || y2 <= y1) {
-                        continue;
-                    }
-
-                    float[] landmarks = new float[10];
-                    for (int landmarkIndex = 0; landmarkIndex < 5; landmarkIndex++) {
-                        float landmarkX = (anchorCenterX + getKeypointCoordinate(keypointIndexer, anchorIndex, landmarkIndex * 2) * stride) / scale;
-                        float landmarkY = (anchorCenterY + getKeypointCoordinate(keypointIndexer, anchorIndex, landmarkIndex * 2 + 1) * stride) / scale;
-                        landmarks[landmarkIndex * 2] = clamp(landmarkX, 0, originalWidth - 1);
-                        landmarks[landmarkIndex * 2 + 1] = clamp(landmarkY, 0, originalHeight - 1);
-                    }
-
-                    detections.add(new Detection(new Rect(x1, y1, x2 - x1, y2 - y1), confidence, landmarks));
+                if (x2 <= x1 || y2 <= y1) {
+                    continue;
                 }
-            } finally {
-                if (scoreIndexer != null) {
-                    scoreIndexer.release();
+
+                float[] landmarks = new float[10];
+                for (int landmarkIndex = 0; landmarkIndex < 5; landmarkIndex++) {
+                    float landmarkX = (anchorCenterX + keypointData[(int) (anchorIndex * 10L + landmarkIndex * 2L)] * stride) / scale;
+                    float landmarkY = (anchorCenterY + keypointData[(int) (anchorIndex * 10L + landmarkIndex * 2L + 1L)] * stride) / scale;
+                    landmarks[landmarkIndex * 2] = clamp(landmarkX, 0, originalWidth - 1);
+                    landmarks[landmarkIndex * 2 + 1] = clamp(landmarkY, 0, originalHeight - 1);
                 }
-                if (boxIndexer != null) {
-                    boxIndexer.release();
-                }
-                if (keypointIndexer != null) {
-                    keypointIndexer.release();
-                }
+
+                detections.add(new Detection(new Rect(x1, y1, x2 - x1, y2 - y1), confidence, landmarks));
             }
         }
 
         return detections;
     }
 
-    private long getAnchoredEntryCount(FloatIndexer indexer) {
-        if (indexer.rank() >= 2) {
-            return indexer.size(1);
+    private long getAnchoredEntryCount(TensorData tensor) {
+        if (tensor.rank() >= 2) {
+            return tensor.size(1);
         }
-        return indexer.size(0);
-    }
-
-    private String sanitizeOutputName(String outputName) {
-        if (outputName == null) {
-            return "";
-        }
-        return outputName.replace("\u0000", "").trim();
-    }
-
-    private float getScore(FloatIndexer indexer, int anchorIndex) {
-        if (indexer.rank() >= 3) {
-            return indexer.get(0, anchorIndex, 0);
-        }
-        if (indexer.rank() == 2) {
-            return indexer.get(0, anchorIndex);
-        }
-        return indexer.get(anchorIndex);
-    }
-
-    private float getBoxCoordinate(FloatIndexer indexer, int anchorIndex, int coordinateIndex) {
-        if (indexer.rank() >= 3) {
-            return indexer.get(0, anchorIndex, coordinateIndex);
-        }
-        if (indexer.rank() == 2) {
-            return indexer.get(anchorIndex, coordinateIndex);
-        }
-        return indexer.get(anchorIndex * 4L + coordinateIndex);
-    }
-
-    private float getKeypointCoordinate(FloatIndexer indexer, int anchorIndex, int coordinateIndex) {
-        if (indexer.rank() >= 3) {
-            return indexer.get(0, anchorIndex, coordinateIndex);
-        }
-        if (indexer.rank() == 2) {
-            return indexer.get(anchorIndex, coordinateIndex);
-        }
-        return indexer.get(anchorIndex * 10L + coordinateIndex);
+        return tensor.size(0);
     }
 
     private List<FaceDetection> applyNms(List<Detection> detections) {
@@ -406,32 +332,6 @@ public class DeepLearningFaceDetectionService {
 
     private record Detection(Rect rect, float confidence, float[] landmarks) {}
 
-    private static void configureNet(
-            Net net,
-            AccelerationProperties.Backend backend,
-            AccelerationProperties.Target target,
-            boolean fallbackToCpu,
-            String modelName
-    ) {
-        try {
-            if (backend != null && backend != AccelerationProperties.Backend.AUTO) {
-                net.setPreferableBackend(mapBackend(backend));
-            }
-            if (target != null && target != AccelerationProperties.Target.AUTO) {
-                net.setPreferableTarget(mapTarget(target));
-            }
-            log.info("Configured {} DNN backend={} target={}", modelName, backend, target);
-        } catch (Exception e) {
-            if (!fallbackToCpu) {
-                throw e;
-            }
-            log.warn("Failed to configure {} acceleration (backend={}, target={}), falling back to CPU: {}",
-                    modelName, backend, target, e.getMessage());
-            net.setPreferableBackend(DNN_BACKEND_OPENCV);
-            net.setPreferableTarget(DNN_TARGET_CPU);
-        }
-    }
-
     private static AccelerationProperties.Target resolveTarget(
             AccelerationProperties accelerationProperties,
             AccelerationProperties.Target configuredTarget
@@ -443,22 +343,5 @@ public class DeepLearningFaceDetectionService {
             return AccelerationProperties.Target.OPENCL;
         }
         return accelerationProperties.getTarget();
-    }
-
-    private static int mapBackend(AccelerationProperties.Backend backend) {
-        return switch (backend) {
-            case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
-            case CUDA -> DNN_BACKEND_CUDA;
-        };
-    }
-
-    private static int mapTarget(AccelerationProperties.Target target) {
-        return switch (target) {
-            case AUTO, CPU -> DNN_TARGET_CPU;
-            case OPENCL -> DNN_TARGET_OPENCL;
-            case OPENCL_FP16 -> DNN_TARGET_OPENCL_FP16;
-            case CUDA -> DNN_TARGET_CUDA;
-            case CUDA_FP16 -> DNN_TARGET_CUDA_FP16;
-        };
     }
 }
