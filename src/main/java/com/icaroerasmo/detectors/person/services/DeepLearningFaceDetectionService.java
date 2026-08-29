@@ -448,6 +448,7 @@ public class DeepLearningFaceDetectionService {
     private static int mapBackend(AccelerationProperties.Backend backend) {
         return switch (backend) {
             case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
+            case CUDA -> DNN_BACKEND_CUDA;
         };
     }
 
@@ -456,6 +457,8 @@ public class DeepLearningFaceDetectionService {
             case AUTO, CPU -> DNN_TARGET_CPU;
             case OPENCL -> DNN_TARGET_OPENCL;
             case OPENCL_FP16 -> DNN_TARGET_OPENCL_FP16;
+            case CUDA -> DNN_TARGET_CUDA;
+            case CUDA_FP16 -> DNN_TARGET_CUDA_FP16;
         };
     }
 }

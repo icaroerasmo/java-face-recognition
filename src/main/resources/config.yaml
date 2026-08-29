@@ -13,10 +13,10 @@ object-detection:
   training:
     root-folder: "train"
   acceleration:
-    backend: OPENCV
-    target: CPU
-    face-detection-target: OPENCL
-    person-detection-target: CPU
+    backend: CUDA
+    target: CUDA
+    face-detection-target: CUDA
+    person-detection-target: CUDA
     enable-opencl: true
     fallback-to-cpu: true
   detection:

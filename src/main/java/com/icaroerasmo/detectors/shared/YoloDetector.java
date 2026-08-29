@@ -28,9 +28,12 @@ import java.util.Set;
 import static org.bytedeco.opencv.global.opencv_core.BORDER_CONSTANT;
 import static org.bytedeco.opencv.global.opencv_core.CV_32F;
 import static org.bytedeco.opencv.global.opencv_core.copyMakeBorder;
+import static org.bytedeco.opencv.global.opencv_dnn.DNN_BACKEND_CUDA;
 import static org.bytedeco.opencv.global.opencv_dnn.DNN_BACKEND_OPENCV;
 import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_CPU;
 import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_OPENCL;
+import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_CUDA;
+import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_CUDA_FP16;
 import static org.bytedeco.opencv.global.opencv_dnn.DNN_TARGET_OPENCL_FP16;
 import static org.bytedeco.opencv.global.opencv_dnn.NMSBoxes;
 import static org.bytedeco.opencv.global.opencv_dnn.blobFromImage;
@@ -370,6 +373,7 @@ public class YoloDetector {
     private static int mapBackend(AccelerationProperties.Backend backend) {
         return switch (backend) {
             case AUTO, OPENCV -> DNN_BACKEND_OPENCV;
+            case CUDA -> DNN_BACKEND_CUDA;
         };
     }
 
@@ -378,6 +382,8 @@ public class YoloDetector {
             case AUTO, CPU -> DNN_TARGET_CPU;
             case OPENCL -> DNN_TARGET_OPENCL;
             case OPENCL_FP16 -> DNN_TARGET_OPENCL_FP16;
+            case CUDA -> DNN_TARGET_CUDA;
+            case CUDA_FP16 -> DNN_TARGET_CUDA_FP16;
         };
     }
 }
