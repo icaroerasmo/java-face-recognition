@@ -49,4 +49,4 @@ COPY --from=build /app/target/classes/opencv/ /app/opencv/
 
 RUN ls -la /app && ls -la /app/train 2>/dev/null || echo "train directory may be empty" && ls -la /app/opencv 2>/dev/null || echo "opencv directory may be empty"
 
-ENTRYPOINT [ "java", "-Dspring.config.additional-location=/app/config/config.yaml", "-jar", "/app/rtsp-object-detection.jar" ]
+ENTRYPOINT [ "java", "-Xmx3g", "-Xlog:gc", "-Dspring.config.additional-location=/app/config/config.yaml", "-jar", "/app/rtsp-object-detection.jar" ]
