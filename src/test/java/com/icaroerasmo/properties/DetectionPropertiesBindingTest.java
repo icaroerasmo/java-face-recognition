@@ -108,4 +108,43 @@ class DetectionPropertiesBindingTest {
         assertEquals(10000L, pet.getDebounceMs());
         assertEquals(45000L, pet.getTelegramThrottleMs());
     }
+
+    @Test
+    void accelerationDefaultsToAutoDetection() {
+        AccelerationProperties acceleration = bind(Map.of()).getAcceleration();
+        assertEquals(AccelerationProperties.Backend.AUTO, acceleration.getBackend());
+        assertEquals(AccelerationProperties.Target.AUTO, acceleration.getTarget());
+        assertEquals(AccelerationProperties.Target.AUTO, acceleration.getFaceDetectionTarget());
+        assertEquals(AccelerationProperties.Target.AUTO, acceleration.getPersonDetectionTarget());
+        assertTrue(acceleration.isEnableOpencl());
+        assertTrue(acceleration.isFallbackToCpu());
+    }
+
+    @Test
+    void accelerationBackendAndTargetValuesBind() {
+        Map<String, Object> props = new HashMap<>();
+        props.put("object-detection.acceleration.backend", "OPENCL");
+        props.put("object-detection.acceleration.target", "VULKAN");
+        props.put("object-detection.acceleration.face-detection-target", "CUDA_FP16");
+        props.put("object-detection.acceleration.person-detection-target", "OPENCL_FP16");
+        props.put("object-detection.acceleration.enable-opencl", "false");
+        props.put("object-detection.acceleration.fallback-to-cpu", "false");
+
+        AccelerationProperties acceleration = bind(props).getAcceleration();
+        assertEquals(AccelerationProperties.Backend.OPENCL, acceleration.getBackend());
+        assertEquals(AccelerationProperties.Target.VULKAN, acceleration.getTarget());
+        assertEquals(AccelerationProperties.Target.CUDA_FP16, acceleration.getFaceDetectionTarget());
+        assertEquals(AccelerationProperties.Target.OPENCL_FP16, acceleration.getPersonDetectionTarget());
+        assertFalse(acceleration.isEnableOpencl());
+        assertFalse(acceleration.isFallbackToCpu());
+    }
+
+    @Test
+    void onnxBackendValuesBind() {
+        Map<String, Object> props = new HashMap<>();
+        props.put("object-detection.acceleration.backend", "ONNX_CUDA");
+
+        AccelerationProperties acceleration = bind(props).getAcceleration();
+        assertEquals(AccelerationProperties.Backend.ONNX_CUDA, acceleration.getBackend());
+    }
 }
