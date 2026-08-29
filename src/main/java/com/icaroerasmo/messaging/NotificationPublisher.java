@@ -8,6 +8,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -16,10 +18,10 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class NotificationPublisher {
-
     private static final String SENDER = "object-detection";
     private static final String EXCHANGE = "telegram.exchange";
     private static final String ROUTING_KEY = "telegram.notifications";
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
 
     private final RabbitTemplate rabbitTemplate;
 
@@ -28,6 +30,8 @@ public class NotificationPublisher {
         List<String> stringArgs = args == null
                 ? List.of()
                 : Arrays.stream(args).map(String::valueOf).toList();
+
+        String sentAt = LocalDateTime.now().format(DATE_TIME_FORMATTER);
 
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
@@ -39,7 +43,8 @@ public class NotificationPublisher {
                 null,
                 null,
                 null,
-                false);
+                false,
+                sentAt);
 
         log.debug("Publishing TEXT notification: template={}, args={}", template.name(), stringArgs);
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
@@ -47,6 +52,8 @@ public class NotificationPublisher {
 
     @Async
     public void publishPhoto(NotificationMessage.CaptionSpec caption, byte[] payload) {
+        String sentAt = LocalDateTime.now().format(DATE_TIME_FORMATTER);
+
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
                 SENDER,
@@ -57,7 +64,8 @@ public class NotificationPublisher {
                 caption,
                 null,
                 payload,
-                false);
+                false,
+                sentAt);
 
         log.debug("Publishing PHOTO notification: payload={} bytes", payload != null ? payload.length : 0);
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
@@ -73,6 +81,8 @@ public class NotificationPublisher {
                 ? List.of()
                 : Arrays.stream(args).map(String::valueOf).toList();
 
+        String sentAt = LocalDateTime.now().format(DATE_TIME_FORMATTER);
+
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
                 SENDER,
@@ -83,7 +93,8 @@ public class NotificationPublisher {
                 null,
                 null,
                 payload,
-                false);
+                false,
+                sentAt);
 
         log.debug("Publishing PHOTO notification: template={}, args={}, payload={} bytes",
                 template.name(), stringArgs, payload != null ? payload.length : 0);
@@ -92,6 +103,8 @@ public class NotificationPublisher {
 
     @Async
     public void publishAnimation(NotificationMessage.CaptionSpec caption, byte[] payload) {
+        String sentAt = LocalDateTime.now().format(DATE_TIME_FORMATTER);
+
         NotificationMessage message = new NotificationMessage(
                 UUID.randomUUID().toString(),
                 SENDER,
@@ -102,7 +115,8 @@ public class NotificationPublisher {
                 caption,
                 null,
                 payload,
-                false);
+                false,
+                sentAt);
 
         log.debug("Publishing ANIMATION notification: payload={} bytes", payload != null ? payload.length : 0);
         rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, message);
