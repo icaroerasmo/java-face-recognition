@@ -13,7 +13,7 @@ troubleshooting tips, and release workflow.
 3. Detects people first with SSD MobileNet.
 4. Runs face detection and recognition only on frames that contain people.
 5. Tracks detections across multiple frames.
-6. Sends Telegram notifications with still images and optional clips.
+6. Publishes detection notifications (still images and optional clips) to RabbitMQ, delivered by the dedicated notifier service.
 
 It is optimized for long-running camera ingestion rather than request/response web traffic.
 
@@ -56,7 +56,7 @@ The trained gallery is stored in SQLite instead of only living on disk. The serv
 
 ### 4. Tracking and notification
 
-`PeopleTrackingService` aggregates detections across frames before notifying Telegram.
+`PeopleTrackingService` aggregates detections across frames before publishing notifications to RabbitMQ.
 
 This avoids one-frame noise and decides:
 
@@ -79,7 +79,7 @@ Key settings:
 | `object-detection.streams.max-consecutive-null-frames` | Reconnect threshold for unstable streams |
 | `object-detection.detection.person-confidence-threshold` | Minimum confidence for person detections |
 | `object-detection.acceleration.*` | OpenCV backend and target selection |
-| `object-detection.telegram.*` | Telegram bot/chat and clip settings |
+| `object-detection.telegram.*` | Clip rendering settings (gif-fps, gif-max-frames) |
 
 ## Training data
 
