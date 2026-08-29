@@ -20,7 +20,7 @@ import java.util.List;
 /**
  * Detects pets (when enabled) on frames with no detected people and publishes the
  * pet alert: overlay {@code PET_DETECTED} event (debounced) plus an annotated
- * Telegram photo (throttled).
+ * photo notification (throttled).
  *
  * <p>The pet rects are owned by this stage and deallocated in {@code finally};
  * they are never transferred into the {@link FrameContext}.
@@ -52,8 +52,8 @@ public class PetDetectionStage {
 
         long now = System.currentTimeMillis();
         try {
-            // Telegram photo (throttled per camera).
-            if (petAlertPolicy.shouldSendTelegram(cameraName, now, petProperties.getTelegramThrottleMs())) {
+            // Photo notification (throttled per camera).
+            if (petAlertPolicy.shouldSend(cameraName, now, petProperties.getThrottleMs())) {
                 Mat annotated = null;
                 try {
                     annotated = ctx.getFrame().clone();

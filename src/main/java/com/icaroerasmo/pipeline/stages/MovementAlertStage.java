@@ -12,8 +12,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 /**
- * Publishes the movement alert (overlay event debounced, Telegram text throttled
- * and gated by {@code movement.notifyTelegram}). Only reached when no people and no
+ * Publishes the movement alert (overlay event debounced, notification text throttled
+ * and gated by {@code movement.notify}). Only reached when no people and no
  * pets were detected in the frame.
  */
 @Log4j2
@@ -37,9 +37,9 @@ public class MovementAlertStage {
                 detectionEventPublisher.publishMovement(cameraName, movementProperties.getDebounceMs());
             }
 
-            // Telegram text (throttled per camera + notifyTelegram flag).
-            if (movementProperties.isNotifyTelegram()
-                    && movementAlertPolicy.shouldSendTelegram(cameraName, now, movementProperties.getTelegramThrottleMs())) {
+            // Notification text (throttled per camera + notify flag).
+            if (movementProperties.isNotify()
+                    && movementAlertPolicy.shouldSend(cameraName, now, movementProperties.getThrottleMs())) {
                 telegramPublisherService.sendMovementAlert(cameraName);
             }
         } catch (Exception e) {

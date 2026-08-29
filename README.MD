@@ -29,7 +29,7 @@ object-detection:
     person-detection-target: CPU
     enable-opencl: true
     fallback-to-cpu: true
-  telegram:
+  clips:
     gif-fps: 10
     gif-max-frames: 30
 ```
@@ -79,14 +79,14 @@ Controls the OpenCV DNN backend/target selection.
 | `object-detection.acceleration.enable-opencl` | boolean | `true` | Enables OpenCL-oriented target selection when supported by the runtime. |
 | `object-detection.acceleration.fallback-to-cpu` | boolean | `true` | Falls back to CPU if the requested acceleration backend or target cannot be initialized. |
 
-## `object-detection.telegram`
+## `object-detection.clips`
 
 Controls clip rendering for detection notifications. Notifications are published to RabbitMQ and delivered by the dedicated notifier service.
 
 | Property | Type | Default | Description |
 |---|---:|---|
-| `object-detection.telegram.gif-fps` | integer | `10` | Frame rate used when building animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
-| `object-detection.telegram.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for clips. Lower values reduce RAM and clip-encoding cost. |
+| `object-detection.clips.gif-fps` | integer | `10` | Frame rate used when building animation clips. Increase it for smoother clips; decrease it for smaller and lighter files. |
+| `object-detection.clips.gif-max-frames` | integer | `30` | Maximum number of frame images retained per tracked person for clips. Lower values reduce RAM and clip-encoding cost. |
 
 ## Security guidance
 

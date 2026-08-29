@@ -39,7 +39,7 @@ public class PetDetectionProperties {
     private long debounceMs = 5000;
 
     /**
-     * Minimum interval (ms) between Telegram pet photos per camera.
+     * Minimum interval (ms) between pet photo notifications per camera.
      */
-    private long telegramThrottleMs = 30000;
+    private long throttleMs = 30000;
 }

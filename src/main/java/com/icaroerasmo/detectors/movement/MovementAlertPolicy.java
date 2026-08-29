@@ -5,8 +5,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Pure per-camera alert policy combining an overlay debounce window and a separate
- * telegram throttle window. Used for both movement and pet alerts (one instance per
- * alert kind) so the telegram channel is not spammed even when the overlay updates
+ * notification throttle window. Used for both movement and pet alerts (one instance per
+ * alert kind) so the notification channel is not spammed even when the overlay updates
  * more frequently.
  *
  * <p>All updates are atomic per camera via {@link ConcurrentHashMap#compute} - never
@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class MovementAlertPolicy {
 
-    // [0] = last overlay publish time, [1] = last telegram send time
+    // [0] = last overlay publish time, [1] = last notification send time
     private final ConcurrentHashMap<String, long[]> lastActionByCamera = new ConcurrentHashMap<>();
 
     /**
@@ -30,11 +30,11 @@ public class MovementAlertPolicy {
     }
 
     /**
-     * @return {@code true} when a telegram notification should be sent (throttled
-     *         with {@code telegramThrottleMs} per camera).
+     * @return {@code true} when a notification should be sent (throttled
+     *         with {@code throttleMs} per camera).
      */
-    public boolean shouldSendTelegram(String cameraName, long now, long telegramThrottleMs) {
-        return updateWindow(cameraName, now, telegramThrottleMs, 1);
+    public boolean shouldSend(String cameraName, long now, long throttleMs) {
+        return updateWindow(cameraName, now, throttleMs, 1);
     }
 
     public void reset(String cameraName) {

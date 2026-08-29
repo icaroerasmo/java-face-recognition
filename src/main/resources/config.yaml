@@ -30,11 +30,11 @@ object-detection:
     max-person-area-ratio: 0.45
     movement:
       enabled: true
-      notify-telegram: true
+      notify: true
       difference-threshold: 25
       min-motion-ratio: 0.01
       debounce-ms: 5000
-      telegram-throttle-ms: 30000
+      throttle-ms: 30000
       processing-width: 320
       gaussian-kernel-size: 5
       dilation-iterations: 2
@@ -44,8 +44,8 @@ object-detection:
       plant-confidence-threshold: 0.5
       plant-suppression-iou: 0.35
       debounce-ms: 5000
-      telegram-throttle-ms: 30000
-  telegram:
+      throttle-ms: 30000
+  clips:
     # Animation FPS for tracking clips published to RabbitMQ (higher = smoother, larger/heavier files)
     gif-fps: 10
     # Maximum number of frame images retained per tracked person for clips
