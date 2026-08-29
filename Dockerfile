@@ -2,7 +2,12 @@ FROM maven:3.8.8-amazoncorretto-21 AS build
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src/
-RUN mvn clean package -DskipTests
+ARG TARGETPLATFORM
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+      mvn clean package -DskipTests -Djavacpp.platform=linux-arm64; \
+    else \
+      mvn clean package -DskipTests -Djavacpp.platform=linux-x86_64; \
+    fi
 
 FROM eclipse-temurin:21-jre-jammy
 ENV DEBIAN_FRONTEND=noninteractive

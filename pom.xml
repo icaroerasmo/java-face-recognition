@@ -11,7 +11,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.icaroerasmo.com</groupId>
   <artifactId>rtsp-object-detection</artifactId>
-  <version>0.5.3</version>
+  <version>0.5.4</version>
   <name>object-detection</name>
   <url>http://maven.apache.org</url>
 
@@ -25,9 +25,10 @@
   </properties>
 
   <dependencies>
+    <!-- JavaCV core (Frame, OpenCVFrameConverter, FFmpegFrameGrabber) -->
     <dependency>
       <groupId>org.bytedeco</groupId>
-      <artifactId>javacv-platform</artifactId>
+      <artifactId>javacv</artifactId>
       <version>1.5.11</version>
     </dependency>
     <!-- https://mvnrepository.com/artifact/org.apache.commons/commons-collections4 -->
@@ -122,4 +123,99 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <!-- Default: linux-x86_64 with CUDA (JavaCPP publishes opencv-gpu only for x86_64).
+         Select with: mvn package -Djavacpp.platform=linux-x86_64 (or no flag) -->
+    <profile>
+      <id>linux-x86_64</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>opencv</artifactId>
+          <version>4.10.0-1.5.11</version>
+          <classifier>linux-x86_64-gpu</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>openblas</artifactId>
+          <version>0.3.28-1.5.11</version>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>openblas</artifactId>
+          <version>0.3.28-1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>cuda</artifactId>
+          <version>12.6-9.5-1.5.11</version>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>cuda</artifactId>
+          <version>12.6-9.5-1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>cuda</artifactId>
+          <version>12.6-9.5-1.5.11</version>
+          <classifier>linux-x86_64-redist</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>ffmpeg</artifactId>
+          <version>7.1-1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>javacpp</artifactId>
+          <version>1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+      </dependencies>
+    </profile>
+    <!-- linux-arm64 (CPU only: JavaCPP has no opencv-gpu for arm64).
+         Select with: mvn package -Djavacpp.platform=linux-arm64 -->
+    <profile>
+      <id>linux-arm64</id>
+      <activation>
+        <property>
+          <name>javacpp.platform</name>
+          <value>linux-arm64</value>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>opencv</artifactId>
+          <version>4.10.0-1.5.11</version>
+          <classifier>linux-arm64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>openblas</artifactId>
+          <version>0.3.28-1.5.11</version>
+          <classifier>linux-arm64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>ffmpeg</artifactId>
+          <version>7.1-1.5.11</version>
+          <classifier>linux-arm64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>javacpp</artifactId>
+          <version>1.5.11</version>
+          <classifier>linux-arm64</classifier>
+        </dependency>
+      </dependencies>
+    </profile>
+  </profiles>
 </project>

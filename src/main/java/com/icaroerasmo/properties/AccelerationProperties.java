@@ -16,13 +16,16 @@ public class AccelerationProperties {
 
     public enum Backend {
         AUTO,
-        OPENCV
+        OPENCV,
+        CUDA
     }
 
     public enum Target {
         AUTO,
         CPU,
         OPENCL,
-        OPENCL_FP16
+        OPENCL_FP16,
+        CUDA,
+        CUDA_FP16
     }
 }
