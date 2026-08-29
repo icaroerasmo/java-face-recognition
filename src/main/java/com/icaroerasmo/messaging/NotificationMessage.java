@@ -13,7 +13,8 @@ public record NotificationMessage(
         CaptionSpec caption,
         String filename,
         byte[] payload,
-        boolean appendNoLogs) {
+        boolean appendNoLogs,
+        String sentAt) {
 
     public enum MediaType { TEXT, PHOTO, ANIMATION, DOCUMENT }
 
