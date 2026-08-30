@@ -24,12 +24,16 @@ import static org.bytedeco.opencv.global.opencv_imgproc.threshold;
 /**
  * Deterministic OpenCV frame-differencing movement detector.
  *
- * <p>Pipeline per camera: grayscale {@code ->} resize to {@code processingWidth}
- * (aspect preserved) {@code ->} GaussianBlur {@code ->} {@code absdiff} vs the
- * previous processed grayscale frame {@code ->} binary threshold
+ * <p>Pipeline per camera: resize to {@code processingWidth} (aspect preserved,
+ * BGR) {@code ->} grayscale {@code ->} GaussianBlur {@code ->} {@code absdiff}
+ * vs the previous processed grayscale frame {@code ->} binary threshold
  * ({@code differenceThreshold}) {@code ->} dilate ({@code dilationIterations})
  * {@code ->} changed-pixel ratio = nonzero / total. Movement is declared when
  * {@code ratio >= minMotionRatio}.
+ *
+ * <p>Resizing before the grayscale conversion keeps the expensive
+ * {@code cvtColor} on the small downscaled image instead of the full-resolution
+ * frame, which is the dominant CPU cost of the differencing pipeline.</p>
  *
  * <p>The first frame per camera only initializes state and returns {@code false}.
  * When the processed frame dimensions change, the camera state is reset and the
@@ -83,21 +87,23 @@ public class OpenCvMovementDetector implements MovementDetector {
                 return false;
             }
 
-            // 1. Grayscale
-            gray = new Mat();
-            cvtColor(frame, gray, COLOR_BGR2GRAY);
-
-            // 2. Resize to processingWidth preserving aspect ratio
+            // 1. Resize to processingWidth preserving aspect ratio (BGR, BEFORE
+            //    grayscale) so the expensive cvtColor runs on the small image
+            //    instead of the full-resolution frame.
             double scale = (double) processingWidth / frameWidth;
             int targetHeight = Math.max(1, (int) Math.round(frameHeight * scale));
             resized = new Mat();
             resizedSize = new Size(processingWidth, targetHeight);
-            resize(gray, resized, resizedSize);
+            resize(frame, resized, resizedSize);
+
+            // 2. Grayscale on the downscaled image
+            gray = new Mat();
+            cvtColor(resized, gray, COLOR_BGR2GRAY);
 
             // 3. GaussianBlur to suppress sensor noise
             kernelSize = new Size(gaussianKernelSize, gaussianKernelSize);
             blurred = new Mat();
-            GaussianBlur(resized, blurred, kernelSize, 0);
+            GaussianBlur(gray, blurred, kernelSize, 0);
 
             // 4. Compare against the previous processed frame (owned by the state store)
             Mat previous = stateStore.getPrevious(cameraName);

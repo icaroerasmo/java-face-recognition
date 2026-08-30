@@ -3,6 +3,7 @@ package com.icaroerasmo.service;
 import com.icaroerasmo.detectors.movement.MovementDetector;
 import com.icaroerasmo.detectors.movement.MovementResultStore;
 import com.icaroerasmo.properties.CameraProperties;
+import com.icaroerasmo.properties.ObjectDetectionProperties;
 import com.icaroerasmo.properties.StreamsProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -38,6 +39,7 @@ public class RtspFrameExtractorService {
     private final StreamsProperties streamsProperties;
     private final MovementDetector movementDetector;
     private final MovementResultStore movementResultStore;
+    private final ObjectDetectionProperties objectDetectionProperties;
 
     // Poison pill to signal consumer thread to stop
     private static final FrameData POISON_PILL = new FrameData(null, 0, 0, 0);
@@ -252,6 +254,11 @@ public class RtspFrameExtractorService {
         BlockingQueue<FrameData> frameQueue = new ArrayBlockingQueue<>(queueCapacity);
         AtomicBoolean shouldStop = new AtomicBoolean(false);
         AtomicBoolean producerError = new AtomicBoolean(false);
+        // Tracks consumer liveness so the producer stops when the consumer dies
+        // (e.g. uncaught Error in the DNN pipeline) instead of running forever
+        // and leaking CPU on an orphaned grab/movement loop.
+        AtomicBoolean consumerAlive = new AtomicBoolean(true);
+        final boolean movementEnabled = objectDetectionProperties.getDetection().getMovement().isEnabled();
 
         // PRODUCER THREAD: Grabs frames and converts to byte arrays
         Thread producer = new Thread(() -> {
@@ -265,7 +272,7 @@ public class RtspFrameExtractorService {
                 log.info("Frame producer started for: {} (processingFps={}, movementFps={}, queueCapacity={}, processingWidth={})",
                         rtspUrl, processingFps, movementFps, queueCapacity, processingWidth);
 
-                while (!shouldStop.get() && !Thread.currentThread().isInterrupted()) {
+                while (!shouldStop.get() && !Thread.currentThread().isInterrupted() && consumerAlive.get()) {
                     Frame frame = null;
                     Mat mat = null;
                     Mat resizedMat = null;
@@ -298,7 +305,9 @@ public class RtspFrameExtractorService {
 
                         // Movement detection runs at movement-fps (decoupled from the
                         // slower DNN processing-fps) so movement triggers stay fast.
-                        if (nowNs - lastMovementAtNs >= movementIntervalNs) {
+                        // Skipped entirely when movement detection is disabled, so the
+                        // full-resolution convert + differencing cost is not paid.
+                        if (movementEnabled && nowNs - lastMovementAtNs >= movementIntervalNs) {
                             lastMovementAtNs = nowNs;
                             movementMat = converter.convert(frame);
                             if (movementMat != null && !movementMat.empty()) {
@@ -319,8 +328,16 @@ public class RtspFrameExtractorService {
                         }
                         lastQueuedAtNs = nowNs;
 
-                        // Convert Frame to Mat
-                        mat = converter.convert(frame);
+                        // Convert Frame to Mat. When the movement-detection conversion
+                        // already produced a full-resolution Mat for this frame, reuse it
+                        // instead of converting the frame a second time (saves one full-res
+                        // copy per coincident frame).
+                        if (movementMat != null && !movementMat.empty()) {
+                            mat = movementMat;
+                            movementMat = null; // ownership transferred to mat (released in finally)
+                        } else {
+                            mat = converter.convert(frame);
+                        }
                         if (mat == null || mat.empty()) {
                             continue;
                         }
@@ -393,6 +410,9 @@ public class RtspFrameExtractorService {
                 log.error("Producer thread error for {}: {}", rtspUrl, e.getMessage(), e);
                 producerError.set(true);
             } finally {
+                if (!consumerAlive.get()) {
+                    log.warn("Frame producer stopped for {} because the consumer thread died", rtspUrl);
+                }
                 try {
                     frameQueue.offer(POISON_PILL, 1, TimeUnit.SECONDS);
                 } catch (Exception ignore) {}
@@ -455,6 +475,10 @@ public class RtspFrameExtractorService {
             } catch (Exception e) {
                 log.error("Consumer thread error for {}: {}", rtspUrl, e.getMessage(), e);
             } finally {
+                // Signal the producer to stop even when this thread dies from an
+                // uncaught Error (OOM, native crash), so no orphaned producer is left
+                // grabbing frames and running movement detection forever.
+                consumerAlive.set(false);
                 frameQueue.clear();
                 log.info("Frame consumer stopped for: {}", rtspUrl);
             }
