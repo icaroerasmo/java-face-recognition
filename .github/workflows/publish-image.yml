@@ -40,9 +40,15 @@ jobs:
           - platform: linux/amd64
             runner: ubuntu-latest
             tag_suffix: ""
+            opencv_variant: cuda
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
             tag_suffix: "-arm64"
+            opencv_variant: opencl
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            tag_suffix: "-opencl"
+            opencv_variant: opencl
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -78,6 +84,8 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
+          build-args: |
+            OPENCV_VARIANT=${{ matrix.opencv_variant }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extractVersion.outputs.version }}${{ matrix.tag_suffix }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest${{ matrix.tag_suffix }}
@@ -115,5 +123,11 @@ jobs:
         run: |
           VERSION=${{ steps.extractVersion.outputs.version }}
           IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # CUDA manifest: amd64 (CUDA) + arm64 (OpenCL)
           docker buildx imagetools create -t $IMG:$VERSION $IMG:$VERSION $IMG:$VERSION-arm64
           docker buildx imagetools create -t $IMG:latest $IMG:latest $IMG:latest-arm64
+          docker buildx imagetools create -t $IMG:$VERSION-cuda $IMG:$VERSION $IMG:$VERSION-arm64
+          docker buildx imagetools create -t $IMG:latest-cuda $IMG:latest $IMG:latest-arm64
+          # OpenCL manifest: amd64 (OpenCL) + arm64 (OpenCL) for machines without NVIDIA GPU
+          docker buildx imagetools create -t $IMG:$VERSION-opencl $IMG:$VERSION-opencl $IMG:$VERSION-arm64
+          docker buildx imagetools create -t $IMG:latest-opencl $IMG:latest-opencl $IMG:latest-arm64

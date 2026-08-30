@@ -224,5 +224,43 @@
         </dependency>
       </dependencies>
     </profile>
+    <!-- linux-x86_64 CPU/OpenCL build (no CUDA): for machines without an NVIDIA GPU
+         (AMD Radeon / Intel iGPU via OpenCL, or plain CPU inference).
+         Select with: mvn package -Djavacpp.platform=linux-x86_64-cpu -->
+    <profile>
+      <id>linux-x86_64-cpu</id>
+      <activation>
+        <property>
+          <name>javacpp.platform</name>
+          <value>linux-x86_64-cpu</value>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>opencv</artifactId>
+          <version>4.10.0-1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>openblas</artifactId>
+          <version>0.3.28-1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>ffmpeg</artifactId>
+          <version>7.1-1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+        <dependency>
+          <groupId>org.bytedeco</groupId>
+          <artifactId>javacpp</artifactId>
+          <version>1.5.11</version>
+          <classifier>linux-x86_64</classifier>
+        </dependency>
+      </dependencies>
+    </profile>
   </profiles>
 </project>
