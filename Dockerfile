@@ -3,8 +3,12 @@ WORKDIR /app
 COPY pom.xml .
 COPY src ./src/
 ARG TARGETPLATFORM
+# cuda (default, NVIDIA) | opencl (AMD Radeon / Intel iGPU via OpenCL, or CPU)
+ARG OPENCV_VARIANT=cuda
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
       mvn clean package -DskipTests -Djavacpp.platform=linux-arm64; \
+    elif [ "$OPENCV_VARIANT" = "opencl" ]; then \
+      mvn clean package -DskipTests -Djavacpp.platform=linux-x86_64-cpu; \
     else \
       mvn clean package -DskipTests -Djavacpp.platform=linux-x86_64; \
     fi
@@ -16,17 +20,21 @@ ARG TARGETPLATFORM
 
 # Update package lists and install required native dependencies for OpenCV/JavaCV
 # NOTE: libquadmath0 is x86-only (GCC quadmath) and does not exist on arm64
+# OpenCL ICDs (ocl-icd-libopencl1 + mesa-opencl-icd) enable AMD Radeon / Intel iGPU
+# acceleration via the OPENCL DNN target when the host exposes the GPU drivers.
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg rclone tzdata libgtk-3-0 libgtk2.0-0 libsm6 libxrender1 libxext6 libx11-6 \
         libfontconfig1 libice6 libgomp1 libgfortran5 libstdc++6 libopenblas0 libopenblas-dev \
         liblapack3 liblapack-dev libblas3 libjpeg-turbo-progs libpng-dev libtiff5 libpython3.10 \
+        ocl-icd-libopencl1 mesa-opencl-icd \
         && rm -rf /var/lib/apt/lists/*; \
     else \
       apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg rclone tzdata libgtk-3-0 libgtk2.0-0 libsm6 libxrender1 libxext6 libx11-6 \
         libfontconfig1 libice6 libgomp1 libquadmath0 libgfortran5 libstdc++6 libopenblas0 libopenblas-dev \
         liblapack3 liblapack-dev libblas3 libjpeg-turbo-progs libpng-dev libtiff5 libpython3.10 \
+        ocl-icd-libopencl1 mesa-opencl-icd \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
