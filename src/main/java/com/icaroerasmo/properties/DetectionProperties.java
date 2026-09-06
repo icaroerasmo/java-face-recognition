@@ -27,6 +27,12 @@ public class DetectionProperties {
      */
     private double maxPersonAreaRatio = 0.45;
 
+    /**
+     * Minimum interval between person detection notifications for the same
+     * person on the same camera. Reduces notification volume at the source.
+     */
+    private long notificationCooldownMs = 30_000;
+
     @NestedConfigurationProperty
     private MovementDetectionProperties movement = new MovementDetectionProperties();
 

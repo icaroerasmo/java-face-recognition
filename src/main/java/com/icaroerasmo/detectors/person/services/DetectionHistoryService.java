@@ -1,5 +1,6 @@
 package com.icaroerasmo.detectors.person.services;
 
+import com.icaroerasmo.properties.ObjectDetectionProperties;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
 
@@ -17,16 +18,23 @@ import static com.icaroerasmo.utils.FaceHashUtils.computeSimilarity;
 @Service
 public class DetectionHistoryService {
 
-    // 5 seconds cooldown per person per camera
-    private static final long DETECTION_COOLDOWN_MS = 5 * 1000;
-
     // Similarity threshold (0-100, where lower is more similar)
     private static final int SIMILARITY_THRESHOLD = 15;
+
+    private final ObjectDetectionProperties properties;
 
     private final Map<String, DetectionRecord> detectionHistory = new ConcurrentHashMap<>();
 
     // Track recent detections per camera to check for similar frames
     private final Map<String, CameraDetectionHistory> cameraHistory = new ConcurrentHashMap<>();
+
+    public DetectionHistoryService(ObjectDetectionProperties properties) {
+        this.properties = properties;
+    }
+
+    private long detectionCooldownMs() {
+        return properties.getDetection().getNotificationCooldownMs();
+    }
 
     /**
      * Checks if an UNKNOWN person detection should be sent (after tracking)
@@ -54,7 +62,7 @@ public class DetectionHistoryService {
 
         long timeSinceLastDetection = now - lastDetection.timestamp;
 
-        if (timeSinceLastDetection < DETECTION_COOLDOWN_MS) {
+        if (timeSinceLastDetection < detectionCooldownMs()) {
             // Check face similarity if available
             if (lastDetection.faceHash != null && faceHash != null) {
                 int similarity = computeSimilarity(faceHash, lastDetection.faceHash);
@@ -101,7 +109,7 @@ public class DetectionHistoryService {
 
         long timeSinceLastDetection = now - lastDetection.timestamp;
 
-        if (timeSinceLastDetection < DETECTION_COOLDOWN_MS) {
+        if (timeSinceLastDetection < detectionCooldownMs()) {
             log.debug("Duplicate person detection filtered for {}:{} ({}ms since last)", cameraName, detectedPeopleKey, timeSinceLastDetection);
             return false;
         }

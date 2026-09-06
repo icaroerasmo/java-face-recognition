@@ -28,6 +28,7 @@ object-detection:
     person-confidence-threshold: 0.8
     car-confidence-threshold: 0.5
     max-person-area-ratio: 0.45
+    notification-cooldown-ms: 30000
     movement:
       enabled: true
       notify: true
@@ -51,11 +52,10 @@ object-detection:
     # Maximum number of frame images retained per tracked person for clips
     gif-max-frames: 30
 
-spring:
-  rabbitmq:
-    host: '${RABBITMQ_HOST:localhost}'
-    port: ${RABBITMQ_PORT:5672}
-    username: '${RABBITMQ_USERNAME:guest}'
-    password: '${RABBITMQ_PASSWORD:guest}'
-    publisher-confirm-type: correlated
-    publisher-returns: true
+rabbitMq:
+  host: '${RABBITMQ_HOST:localhost}'
+  port: ${RABBITMQ_PORT:5672}
+  username: '${RABBITMQ_USERNAME:guest}'
+  password: '${RABBITMQ_PASSWORD:guest}'
+  publisher-confirm-type: correlated
+  publisher-returns: true
